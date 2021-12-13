@@ -265,7 +265,7 @@ def determine_hom_refs(
 
 
 def apply_mito_artifact_filter(
-    mt: hl.MatrixTable, artifact_prone_sites_path: str,
+    mt: hl.MatrixTable, artifact_prone_sites_path: str, artifact_prone_sites_reference: str,
 ) -> hl.MatrixTable:
     """
     Add in artifact_prone_site filter.
@@ -275,7 +275,14 @@ def apply_mito_artifact_filter(
     :return: MatrixTable with artifact_prone_sites filter
     """
     # Apply "artifact_prone_site" filter to any SNP or deletion that spans a known problematic site
-    bed = hl.import_bed(artifact_prone_sites_path)
+    if artifact_prone_sites_reference is not None:
+        bed = hl.import_bed(artifact_prone_sites_path, reference_genome=artifact_prone_sites_reference)
+        if artifact_prone_sites_reference == 'GRCh38':
+            bed = bed.key_by()
+            bed = bed.annotate(interval = hl.interval(hl.locus('MT',bed.interval.start.position,reference_genome='GRCh37'), 
+                                                      hl.locus('MT',bed.interval.end.position, reference_genome='GRCh37'))).key_by('interval')
+    else:
+        bed = hl.import_bed(artifact_prone_sites_path)
     bed = bed.annotate(target="artifact")
 
     # Create a region annotation containing the interval that the variant overlaps (for SNP will be one position, but will be longer for deletions based on the length of the deletion)
@@ -346,6 +353,7 @@ def main(args):  # noqa: D103
     file_name = args.file_name
     minimum_homref_coverage = args.minimum_homref_coverage
     chunk_size = args.chunk_size
+    artifact_prone_sites_reference = args.artifact_prone_sites_reference
 
     output_path_mt = f"{output_bucket}/raw_combined.mt"
 
@@ -373,7 +381,7 @@ def main(args):  # noqa: D103
     )
 
     logger.info("Applying artifact_prone_site fiter...")
-    combined_mt = apply_mito_artifact_filter(combined_mt, artifact_prone_sites_path)
+    combined_mt = apply_mito_artifact_filter(combined_mt, artifact_prone_sites_path, artifact_prone_sites_reference)
 
     logger.info("Writing combined MT and VCF...")
     # Set the file names for output files
@@ -415,6 +423,13 @@ if __name__ == "__main__":
         "--artifact-prone-sites-path",
         help="Path to BED file of artifact-prone sites to flag in the FILTER column",
         required=True,
+    )
+    p.add_argument(
+        "-a-ref",
+        "--artifact-prone-sites-reference",
+        help="Reference genome for artifact-prone sites BED file. If specified can be GRCh37 or GRCh38",
+        default='default',
+        type=str,
     )
     p.add_argument(
         "-o",
