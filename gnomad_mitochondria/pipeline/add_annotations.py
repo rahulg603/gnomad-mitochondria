@@ -5,6 +5,9 @@ import logging
 import re
 import sys
 
+import sys
+sys.path.append('/home/jupyter/')
+
 from collections import Counter
 from textwrap import dedent
 
@@ -1924,7 +1927,7 @@ def main(args):  # noqa: D103
         logger.info("Adding gnomAD metadata sample annotations...")
         mt = add_gnomad_metadata(mt)
     else:
-        logger.info("Adding age and pop annotations...")
+        logger.info("Checking for and adding age and pop annotations...")
         mt = add_age_and_pop(mt, participant_data)
 
     logger.info("Adding variant context annotations...")
