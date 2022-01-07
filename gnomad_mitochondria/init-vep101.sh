@@ -26,7 +26,7 @@ apt-get update
 apt-get install -y --allow-unauthenticated docker-ce
 
 # below is new
-sudo usermod -aG docker stens
+sudo usermod -aG docker jupyter
 #
 
 gsutil -u $PROJECT cat gs://${VEP_BUCKET}/loftee-beta/${ASSEMBLY}.tar | tar -xf - -C /vep_data/ &
