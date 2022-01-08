@@ -346,7 +346,7 @@ def add_terra_metadata(
             "mt_mean_coverage": hl.tfloat64,
             "wgs_median_coverage": hl.tfloat64,
         },
-        missing="",
+        missing=["","NA"],
     ).key_by("s")
     ht = ht.rename({"entity:participant_id": "participant_id"})
 
