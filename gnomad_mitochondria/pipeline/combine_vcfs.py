@@ -158,7 +158,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int) -> hl.MatrixT
 
 
 def join_mitochondria_vcfs_into_mt(
-    vcf_paths: Dict[str, str], temp_dir: str, chunk_size: int = 100
+    vcf_paths: Dict[str, str], temp_dir: str, chunk_size: int = 100, include_extra_v2_fields: bool = False
 ) -> hl.MatrixTable:
     """
     Reformat and join individual mitochondrial VCFs into one MatrixTable.
@@ -166,6 +166,7 @@ def join_mitochondria_vcfs_into_mt(
     :param vcf_paths: Dictionary of samples to combine (sample as key, path to VCF as value)
     :param temp_dir: Path to temporary directory for intermediate results
     :param chunk_size: Number of MatrixTables to join per chunk (the number of individual VCFs that should be combined at a time)
+    :param include_extra_v2_fields: Includes extra fields important for analysis of v2.1 source MTs
     :return: Joined MatrixTable of samples given in vcf_paths dictionary
     """
     mt_list = []
@@ -180,7 +181,19 @@ def join_mitochondria_vcfs_into_mt(
         # Because the vcfs are split, there is only one AF value, although misinterpreted as an array because Number=A in VCF header
         # Second value of MMQ is the value of the mapping quality for the alternate allele
         # Add FT annotation for sample genotype filters (pull these from filters annotations of the single-sample VCFs)
-        mt = mt.select_entries("DP", HL=mt.AF[0])
+        if include_extra_v2_fields:
+            fields_of_interest = {'OriginalSelfRefAlleles':'array<str>', 'SwappedFieldIDs':'str'}
+            if 'GT' in mt.entry:
+                mt = mt.drop('GT')
+            for x, item_type in fields_of_interest.items():
+                if x not in mt.entry:
+                    mt = mt.annotate_entries(**{x: hl.missing(item_type)})
+            mt = mt.select_entries("DP", "AD", *list(fields_of_interest.keys()), HL=mt.AF[0])
+            META_DICT['format'].update({'AD': {"Description": "Allelic depth of REF and ALT", "Number": "R", "Type": "Integer"},
+                                        'OriginalSelfRefAlleles': {'Description':'Original self-reference alleles (only if alleles were changed in Liftover repair pipeline)', 'Number':'R', 'Type':'String'},
+                                        'SwappedFieldIDs': {'Description':'Fields remapped during liftover (only if alleles were changed in Liftover repair pipeline)', 'Number':'1', 'Type':'String'}})
+        else:
+            mt = mt.select_entries("DP", HL=mt.AF[0])
         mt = mt.annotate_entries(
             MQ=hl.float(mt.info["MMQ"][1]),
             TLOD=mt.info["TLOD"][0],
@@ -355,6 +368,7 @@ def main(args):  # noqa: D103
     minimum_homref_coverage = args.minimum_homref_coverage
     chunk_size = args.chunk_size
     artifact_prone_sites_reference = args.artifact_prone_sites_reference
+    include_extra_v2_fields = args.include_extra_v2_fields
 
     output_path_mt = f"{output_bucket}/raw_combined.mt"
 
@@ -370,7 +384,7 @@ def main(args):  # noqa: D103
     )
 
     logger.info("Combining VCFs...")
-    combined_mt = join_mitochondria_vcfs_into_mt(vcf_paths, args.temp_dir, chunk_size)
+    combined_mt = join_mitochondria_vcfs_into_mt(vcf_paths, args.temp_dir, chunk_size, include_extra_v2_fields)
     combined_mt = combined_mt.checkpoint(output_path_mt, overwrite=args.overwrite)
 
     logger.info("Removing select sample-level filters...")
@@ -468,6 +482,7 @@ if __name__ == "__main__":
         default=100,
     )
     p.add_argument("--overwrite", help="Overwrites existing files", action="store_true")
+    p.add_argument("--include-extra-v2-fields", help="Loads in exåtra fields from MitochondriaPipeline v2.1, specifically AD, OriginalSelfRefAlleles, and SwappedFieldIDs. If missing will fill with missing.", action="store_true")
 
     args = p.parse_args()
 
