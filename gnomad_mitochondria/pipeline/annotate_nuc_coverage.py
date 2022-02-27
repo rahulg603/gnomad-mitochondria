@@ -146,11 +146,13 @@ def main(args):  # noqa: D103
 
     output_mt = re.sub(r"\.ht$", ".mt", output_ht)
     output_tsv = re.sub(r"\.ht$", ".tsv", output_ht)
-    output_samples = re.sub(r"\.ht$", "_sample_level.txt", output_ht)
+    output_samples_orig = re.sub(r"\.ht$", "_original_sample_level.txt", output_ht)
+    output_samples_remap = re.sub(r"\.ht$", "_remapped_sample_level.txt", output_ht)
 
     logger.info("Writing sample level coverage...")
     sample_mt = cov_mt.key_rows_by(pos=cov_mt.locus.position)
-    sample_mt.coverage.export(output_samples)
+    sample_mt.coverage_original.export(output_samples_orig)
+    sample_mt.coverage_remapped_self.export(output_samples_remap)
 
     logger.info("Writing coverage mt and ht...")
     cov_mt.write(output_mt, overwrite=overwrite)
