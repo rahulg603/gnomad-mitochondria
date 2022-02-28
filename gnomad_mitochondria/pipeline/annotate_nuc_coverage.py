@@ -92,6 +92,7 @@ def main(args):  # noqa: D103
     temp_dir = args.temp_dir
     chunk_size = args.chunk_size
     overwrite = args.overwrite
+    expect_shifted = args.expect_shifted
 
     if args.overwrite == False and hl.hadoop_exists(output_ht):
         logger.warning(
@@ -112,10 +113,13 @@ def main(args):  # noqa: D103
             line = line.rstrip()
             items = line.split("\t")
             participant_id, base_level_coverage_metrics, sample = items[0:3]
+            typedict = {"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr, "coverage_original": hl.tint, "coverage_remapped_self": hl.tint}
+            if expect_shifted:
+                typedict.update({'coverage_remapped_self_shifted':hl.tint})
             ht = hl.import_table(
                 base_level_coverage_metrics,
                 delimiter="\t",
-                types={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr, "coverage_original": hl.tint, "coverage_remapped_self": hl.tint},
+                types=typedict,
                 key=["chrom", "pos"],
             ).drop("target")
             mt1 = ht.select('coverage_original').to_matrix_table_row_major(columns = ['coverage_original'], entry_field_name = 'coverage_original', col_field_name='s')
@@ -123,6 +127,10 @@ def main(args):  # noqa: D103
             mt1 = mt1.key_cols_by(s=sample)
             mt2 = mt2.key_cols_by(s=sample)
             mt = mt1.annotate_entries(coverage_remapped_self = mt2[mt1.row_key, mt1.col_key].coverage_remapped_self)
+            if expect_shifted:
+                mt3 = ht.select('coverage_remapped_self_shifted').to_matrix_table_row_major(columns = ['coverage_remapped_self_shifted'], entry_field_name = 'coverage_remapped_self_shifted', col_field_name='s')
+                mt3 = mt3.key_cols_by(s=sample)
+                mt = mt.annotate_entries(coverage_remapped_self_shifted = mt3[mt.row_key, mt.col_key].coverage_remapped_self_shifted)
             mt_list.append(mt)
 
     logger.info("Joining individual coverage mts...")
@@ -140,6 +148,11 @@ def main(args):  # noqa: D103
         median_original=hl.median(hl.agg.collect(cov_mt.coverage_original)),
         median_remapped=hl.median(hl.agg.collect(cov_mt.coverage_remapped_self))
     )
+    if expect_shifted:
+        cov_mt = cov_mt.annotate_rows(
+            mean_remapped_shifted=hl.float(hl.agg.mean(cov_mt.coverage_remapped_self_shifted)),
+            median_remapped_shifted=hl.median(hl.agg.collect(cov_mt.coverage_remapped_self_shifted))
+        )
     cov_mt.show()
 
     cov_mt = cov_mt.key_rows_by("locus").drop("chrom", "pos")
@@ -153,6 +166,8 @@ def main(args):  # noqa: D103
     sample_mt = cov_mt.key_rows_by(pos=cov_mt.locus.position)
     sample_mt.coverage_original.export(output_samples_orig)
     sample_mt.coverage_remapped_self.export(output_samples_remap)
+    if expect_shifted:
+        sample_mt.coverage_remapped_self_shifted.export(re.sub(r"\.ht$", "_remapped_shifted_sample_level.txt", output_ht))
 
     logger.info("Writing coverage mt and ht...")
     cov_mt.write(output_mt, overwrite=overwrite)
@@ -194,6 +209,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--overwrite", help="Overwrites existing files", action="store_true"
+    )
+    parser.add_argument(
+        "--expect-shifted", action="store_true"
     )
 
     args = parser.parse_args()
