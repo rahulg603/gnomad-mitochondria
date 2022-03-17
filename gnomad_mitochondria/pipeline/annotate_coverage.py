@@ -121,6 +121,8 @@ def main(args):  # noqa: D103
             )
             if not keep_targets:
                 mt = mt.drop("target")
+            else:
+                mt = mt.key_rows_by(*["chrom", "pos", "target"])
             mt = mt.rename({"x": "coverage"})
             mt = mt.key_cols_by(s=sample)
             mt_list.append(mt)
