@@ -92,6 +92,7 @@ def main(args):  # noqa: D103
     temp_dir = args.temp_dir
     chunk_size = args.chunk_size
     overwrite = args.overwrite
+    keep_targets = args.keep_targets
 
     if args.overwrite == False and hl.hadoop_exists(output_ht):
         logger.warning(
@@ -117,7 +118,9 @@ def main(args):  # noqa: D103
                 delimiter="\t",
                 row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
                 row_key=["chrom", "pos"],
-            ).drop("target")
+            )
+            if not keep_targets:
+                mt = mt.drop("target")
             mt = mt.rename({"x": "coverage"})
             mt = mt.key_cols_by(s=sample)
             mt_list.append(mt)
@@ -189,6 +192,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--overwrite", help="Overwrites existing files", action="store_true"
+    )
+    parser.add_argument(
+        "--keep-targets", help="Will add an annotation for target from the coverage file", action="store_true"
     )
 
     args = parser.parse_args()
