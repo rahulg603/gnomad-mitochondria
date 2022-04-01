@@ -72,16 +72,11 @@ def main(args):  # noqa: D103
     numts = args.numts
     numt_only = args.numt_only
 
-    tmp = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/tmp/"
-    qc = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/qc_result_sample.tsv"
-    bases = 500
-    nulls = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/test_null/annotated_file_coverage_null.mt"
-    numts = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/test_null/annotated_file_coverage_numts.mt"
-
-    tmp = "gs://ccdg-4day-temp/tmp/"
-    numts = 'gs://ccdg/rgupta/testing_nulls/annotated_file_coverage_numts.mt'
-    nulls = 'gs://ccdg/rgupta/testing_nulls/annotated_file_coverage_null.mt'
-    qc = "gs://ccdg/rgupta/testing_nulls/qc_result_sample.tsv"
+    # tmp = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/tmp/"
+    # qc = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/qc_result_sample.tsv"
+    # bases = 500
+    # nulls = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/test_null/annotated_file_coverage_null.mt"
+    # numts = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/test_null/annotated_file_coverage_numts.mt"
 
     ht_qc = hl.import_table(qc, impute=True)
     ht_qc = ht_qc.select(s = ht_qc['entity:qc_result_sample_id'], mean_coverage=ht_qc.mean_coverage).key_by('s')
@@ -111,16 +106,22 @@ if __name__ == "__main__":
         description="This script combines individual mitochondria coverage files and outputs a hail table with coverage annotations"
     )
     parser.add_argument(
-        "-i",
-        "--input-tsv",
-        help="Input file with coverage files to combine in tab-delimited format of participant_id, base_level_coverage_metrics, sample",
-        required=True,
+        "--nulls", help="MT with imported null distribution files.",
+    )    
+    parser.add_argument(
+        "--numts", help="MT with imported NUMT coverage files.", required=True,
     )
     parser.add_argument(
-        "-o", "--output-ht", help="Name of ht to write output", required=True
+        "-o", "--output-tsv", help="Name of tsv to write output", required=True
     )
     parser.add_argument(
         "--prune-interval", help="Removes the first and last x bases from each interval, given by this term.", type=int, default=500
+    )
+    parser.add_argument(
+        "--qc", help="Path to QC data. Required to annotate mean coverage and comptue statistics.", required=True
+    )
+    parser.add_argument(
+        "--tmp", help="Folder for temporary files.", required=True
     )
     parser.add_argument(
         "--numt-only", help="If enabled, outputs a NUMT only table of the statistic as a function of sample and target.", action='store_true'
