@@ -1,179 +1,109 @@
 import argparse
-import logging
-import math
-import os
-import re
-import sys
-
 import hail as hl
 
-from os.path import dirname
-from gnomad.utils.slack import slack_notifications
-from hail.utils.java import info
+def prune_by_intervals(mt, bases):
+    ht = mt.rows()
+    ht_locs = ht.group_by(ht.target).aggregate(min_pos = hl.agg.min(ht.locus.position) + bases, 
+                                               max_pos = hl.agg.max(ht.locus.position) - bases)
+    
+    if ht_locs.filter(ht_locs.min_pos > ht_locs.max_pos).count() > 0:
+        raise ValueError('ERROR: there are intervals where the number of bases to drop is greater than the total interval size.')
+    
+    ht_annot = ht.annotate(**ht_locs[ht.target])
+    ht_annot = ht_annot.filter((ht_annot.locus.position >= ht_annot.min_pos) & (ht_annot.locus.position <= ht_annot.max_pos))
+    mt = mt.semi_join_rows(ht_annot)
+    return mt
 
-logging.basicConfig(
-    format="%(asctime)s (%(name)s %(lineno)s): %(message)s",
-    datefmt="%m/%d/%Y %I:%M:%S %p",
-)
-logger = logging.getLogger("Annotate coverage")
-logger.setLevel(logging.INFO)
+
+def annotate_by_pois(mt):
+    # Determines if a sample has coverage that is too high or low using a Poisson distribution
+    mt = mt.annotate_entries(p_hi = hl.ppois(mt.coverage, mt.mean_coverage, lower_tail=False),
+                             p_lo = hl.ppois(mt.coverage, mt.mean_coverage, lower_tail=True))
+    mt = mt.annotate_entries(is_hi = mt.p_hi <= 0.025, is_lo = mt.p_lo <= 0.025)
+    return mt
 
 
-def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int) -> hl.MatrixTable:
+def get_per_target_stats(mt):
+    mt = mt.group_rows_by(mt.target
+          ).aggregate_rows(N = hl.agg.count()
+          ).aggregate_entries(N_hi = hl.agg.count_where(mt.is_hi), 
+                              N_lo = hl.agg.count_where(mt.is_lo)).result()
+    mt = mt.annotate_entries(prop_hi = mt.N_hi/mt.N, prop_lo = mt.N_lo/mt.N)
+    return mt
+
+
+def get_nulls(mt_target, mt_null, tmp, n_pick=1000):
+    """ Gets per-target null distributions.
+    Outputs a MatrixTable with a vector of null values for each NUMT target and individual.
     """
-    Hierarchically join together MatrixTables in the provided list.
+    mt_null_agg = mt_null.group_rows_by(mt_null.target
+                        ).aggregate_entries(null_vec_hi = hl.cumulative_sum(hl.agg.collect(hl.int32(mt_null.is_hi))),
+                                            null_vec_lo = hl.cumulative_sum(hl.agg.collect(hl.int32(mt_null.is_lo)))).result()
+    mt_null_agg = mt_null_agg.repartition(1000).checkpoint(tmp + 'tmp_null_1.mt', overwrite=True)
+    mt_null_agg = mt_null_agg.annotate_rows(rand_idx = hl.int(mt_null_agg.target.split('_')[1]))
+    mt_null_agg = mt_null_agg.filter_rows(mt_null_agg.rand_idx <= n_pick)
+    ht_null_agg = mt_null_agg.annotate_cols(null_hi_s=hl.agg.collect(mt_null_agg.null_vec_hi),
+                                            null_lo_s=hl.agg.collect(mt_null_agg.null_vec_lo)).cols()
+    ht_null_agg = ht_null_agg.repartition(500).checkpoint(tmp + 'tmp_null_2.ht', overwrite=True)
+                                            
+    mt_target = mt_target.annotate_cols(null_hi_s = ht_null_agg[mt_target.s].null_hi_s,
+                                        null_lo_s = ht_null_agg[mt_target.s].null_lo_s)
+    mt_target = mt_target.annotate_cols(null_hi_s = hl.map(lambda x: hl.enumerate(x), mt_target.null_hi_s),
+                                        null_lo_s = hl.map(lambda x: hl.enumerate(x), mt_target.null_lo_s))
+    mt_target = mt_target.repartition(1000).checkpoint(tmp + 'tmp_null_3.mt', overwrite=True)
 
-    :param mts: List of MatrixTables to join together
-    :param temp_dir: Path to temporary directory for intermediate results
-    :param chunk_size: Number of MatrixTables to join per chunk (the number of individual VCFs that should be combined at a time)
-    :return: Joined MatrixTable
-    """
-    # Convert the MatrixTables to tables where entries are an array of structs
-    staging = [mt.localize_entries("__entries", "__cols") for mt in mts]
-    stage = 0
-    while len(staging) > 1:
-        # Calculate the number of jobs to run based on the chunk size
-        n_jobs = int(math.ceil(len(staging) / chunk_size))
-        info(f"multi_way_union_mts: stage {stage}: {n_jobs} total jobs")
-        next_stage = []
-
-        for i in range(n_jobs):
-            # Grab just the tables for the given job
-            to_merge = staging[chunk_size * i : chunk_size * (i + 1)]
-            info(
-                f"multi_way_union_mts: stage {stage} / job {i}: merging {len(to_merge)} inputs"
-            )
-
-            # Multiway zip join will produce an __entries annotation, which is an array where each element is a struct containing the __entries annotation (array of structs) for that sample
-            merged = hl.Table.multi_way_zip_join(to_merge, "__entries", "__cols")
-            # Flatten __entries while taking into account different entry lengths at different samples/variants (samples lacking a variant will be NA)
-            merged = merged.annotate(
-                __entries=hl.flatten(
-                    hl.range(hl.len(merged.__entries)).map(
-                        # Coalesce will return the first non-missing argument, so if the entry info is not missing, use that info, but if it is missing, create an entries struct with the correct element type for each null entry annotation (such as int32 for DP)
-                        lambda i: hl.coalesce(
-                            merged.__entries[i].__entries,
-                            hl.range(hl.len(merged.__cols[i].__cols)).map(
-                                lambda j: hl.null(
-                                    merged.__entries.__entries.dtype.element_type.element_type
-                                )
-                            ),
-                        )
-                    )
-                )
-            )
-
-            # Flatten col annotation from array<struct{__cols: array<struct{s: str}>} to array<struct{s: str}>
-            merged = merged.annotate_globals(
-                __cols=hl.flatten(merged.__cols.map(lambda x: x.__cols))
-            )
-
-            next_stage.append(
-                merged.checkpoint(
-                    os.path.join(temp_dir, f"stage_{stage}_job_{i}.ht"), overwrite=True
-                )
-            )
-        info(f"Completed stage {stage}")
-        stage += 1
-        staging.clear()
-        staging.extend(next_stage)
-
-    # Unlocalize the entries, and unfilter the filtered entries and populate fields with missing values
-    return (
-        staging[0]
-        ._unlocalize_entries("__entries", "__cols", list(mts[0].col_key))
-        .unfilter_entries()
-    )
+    def get_first(vec, n):
+        return hl.filter(lambda z: z[0] < n, vec)
+    
+    mt_target = mt_target.annotate_entries(null_vec_hi = hl.map(lambda x: hl.filter(lambda q: q[1], get_first(x, mt_target.N)).length(),
+                                                                mt_target.null_hi_s),
+                                           null_vec_lo = hl.map(lambda x: hl.filter(lambda q: q[1], get_first(x, mt_target.N)).length(),
+                                                                mt_target.null_lo_s)
+                        ).select_cols()
+    mt_target = mt_target.checkpoint(tmp + 'tmp_null_4.mt', overwrite=True)
+    return mt_target
 
 
 def main(args):  # noqa: D103
-    input_tsv = args.input_tsv
-    output_ht = args.output_ht
-    temp_dir = args.temp_dir
-    chunk_size = args.chunk_size
-    overwrite = args.overwrite
-    expect_shifted = args.expect_shifted
+    tmp = args.tmp
+    qc = args.qc
+    bases = args.prune_interval
+    nulls = args.nulls
+    numts = args.numts
+    numt_only = args.numt_only
 
-    if args.overwrite == False and hl.hadoop_exists(output_ht):
-        logger.warning(
-            "Overwrite is set to False but file already exists at %s, script will run but output will not be written",
-            output_ht,
-        )
-    # Ensure that user supplied ht extension for output_ht
-    if not output_ht.endswith(".ht"):
-        sys.exit("Path supplied as output_ht must end with .ht extension")
+    tmp = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/tmp/"
+    qc = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/qc_result_sample.tsv"
+    bases = 500
+    nulls = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/test_null/annotated_file_coverage_null.mt"
+    numts = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/test_null/annotated_file_coverage_numts.mt"
 
-    mt_list = []
-    logger.info(
-        "Reading in individual coverage files as matrix tables and adding to a list of matrix tables..."
-    )
-    with hl.hadoop_open(input_tsv, "r") as f:
-        next(f)
-        for line in f:
-            line = line.rstrip()
-            items = line.split("\t")
-            participant_id, base_level_coverage_metrics, sample = items[0:3]
-            typedict = {"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr, "coverage_original": hl.tint, "coverage_remapped_self": hl.tint}
-            if expect_shifted:
-                typedict.update({'coverage_remapped_self_shifted':hl.tint})
-            ht = hl.import_table(
-                base_level_coverage_metrics,
-                delimiter="\t",
-                types=typedict,
-                key=["chrom", "pos"],
-            ).drop("target")
-            mt1 = ht.select('coverage_original').to_matrix_table_row_major(columns = ['coverage_original'], entry_field_name = 'coverage_original', col_field_name='s')
-            mt2 = ht.select('coverage_remapped_self').to_matrix_table_row_major(columns = ['coverage_remapped_self'], entry_field_name = 'coverage_remapped_self', col_field_name='s')
-            mt1 = mt1.key_cols_by(s=sample)
-            mt2 = mt2.key_cols_by(s=sample)
-            mt = mt1.annotate_entries(coverage_remapped_self = mt2[mt1.row_key, mt1.col_key].coverage_remapped_self)
-            if expect_shifted:
-                mt3 = ht.select('coverage_remapped_self_shifted').to_matrix_table_row_major(columns = ['coverage_remapped_self_shifted'], entry_field_name = 'coverage_remapped_self_shifted', col_field_name='s')
-                mt3 = mt3.key_cols_by(s=sample)
-                mt = mt.annotate_entries(coverage_remapped_self_shifted = mt3[mt.row_key, mt.col_key].coverage_remapped_self_shifted)
-            mt_list.append(mt)
+    tmp = "gs://ccdg-4day-temp/tmp/"
+    numts = 'gs://ccdg/rgupta/testing_nulls/annotated_file_coverage_numts.mt'
+    nulls = 'gs://ccdg/rgupta/testing_nulls/annotated_file_coverage_null.mt'
+    qc = "gs://ccdg/rgupta/testing_nulls/qc_result_sample.tsv"
 
-    logger.info("Joining individual coverage mts...")
-    out_dir = dirname(output_ht)
+    ht_qc = hl.import_table(qc, impute=True)
+    ht_qc = ht_qc.select(s = ht_qc['entity:qc_result_sample_id'], mean_coverage=ht_qc.mean_coverage).key_by('s')
+    
+    mt_numt = prune_by_intervals(hl.read_matrix_table(numts), bases)
+    mt_numt = mt_numt.annotate_cols(mean_coverage = ht_qc[mt_numt.col_key].mean_coverage)
+    mt_numt = annotate_by_pois(mt_numt)
+    mt_numt_ct = get_per_target_stats(mt_numt)
 
-    cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size)
-    n_samples = cov_mt.count_cols()
-
-    logger.info("Adding coverage annotations...")
-    # Calculate the mean and median coverage as well the fraction of samples above 100x or 1000x coverage at each base
-    cov_mt = cov_mt.annotate_rows(
-        locus=hl.locus(cov_mt.chrom, cov_mt.pos, reference_genome="GRCh38"),
-        mean_original=hl.float(hl.agg.mean(cov_mt.coverage_original)),
-        mean_remapped=hl.float(hl.agg.mean(cov_mt.coverage_remapped_self)),
-        median_original=hl.median(hl.agg.collect(cov_mt.coverage_original)),
-        median_remapped=hl.median(hl.agg.collect(cov_mt.coverage_remapped_self))
-    )
-    if expect_shifted:
-        cov_mt = cov_mt.annotate_rows(
-            mean_remapped_shifted=hl.float(hl.agg.mean(cov_mt.coverage_remapped_self_shifted)),
-            median_remapped_shifted=hl.median(hl.agg.collect(cov_mt.coverage_remapped_self_shifted))
-        )
-    cov_mt.show()
-
-    cov_mt = cov_mt.key_rows_by("locus").drop("chrom", "pos")
-
-    output_mt = re.sub(r"\.ht$", ".mt", output_ht)
-    output_tsv = re.sub(r"\.ht$", ".tsv", output_ht)
-    output_samples_orig = re.sub(r"\.ht$", "_original_sample_level.txt", output_ht)
-    output_samples_remap = re.sub(r"\.ht$", "_remapped_sample_level.txt", output_ht)
-
-    logger.info("Writing sample level coverage...")
-    sample_mt = cov_mt.key_rows_by(pos=cov_mt.locus.position)
-    sample_mt.coverage_original.export(output_samples_orig)
-    sample_mt.coverage_remapped_self.export(output_samples_remap)
-    if expect_shifted:
-        sample_mt.coverage_remapped_self_shifted.export(re.sub(r"\.ht$", "_remapped_shifted_sample_level.txt", output_ht))
-
-    logger.info("Writing coverage mt and ht...")
-    cov_mt.write(output_mt, overwrite=overwrite)
-    cov_ht = cov_mt.rows()
-    cov_ht = cov_ht.checkpoint(output_ht, overwrite=overwrite)
-    cov_ht.export(output_tsv)
+    if not numt_only:
+        mt_null = prune_by_intervals(hl.read_matrix_table(nulls), bases)
+        mt_null = mt_null.annotate_cols(mean_coverage = ht_qc[mt_null.col_key].mean_coverage)
+        mt_null = annotate_by_pois(mt_null)
+        mt_null_ct = get_nulls(mt_numt_ct, mt_null, tmp)
+        mt_numt_ct = mt_numt_ct.annotate_entries(null_hi = mt_null_ct[mt_numt.row_key, mt_numt.col_key].null_vec_hi,
+                                                null_lo = mt_null_ct[mt_numt.row_key, mt_numt.col_key].null_vec_lo)
+        mt_numt_ct = mt_numt_ct.select_entries(p_val_hi = mt_numt_ct.null_hi.filter(lambda x: x > mt_numt_ct.prop_hi).length()/mt_numt_ct.null_hi.length(),
+                                            p_val_lo = mt_numt_ct.null_lo.filter(lambda x: x > mt_numt_ct.prop_lo).length()/mt_numt_ct.null_lo.length())
+        ht_out = mt_numt_ct.entries()
+        ht_out.export(args.o)
+    else:
+        mt_numt_ct.entries().export(args.o)
 
 
 if __name__ == "__main__":
@@ -190,35 +120,11 @@ if __name__ == "__main__":
         "-o", "--output-ht", help="Name of ht to write output", required=True
     )
     parser.add_argument(
-        "-t",
-        "--temp-dir",
-        help="Temporary directory to use for intermediate outputs",
-        required=True,
+        "--prune-interval", help="Removes the first and last x bases from each interval, given by this term.", type=int, default=500
     )
     parser.add_argument(
-        "--slack-token", help="Slack token that allows integration with slack",
-    )
-    parser.add_argument(
-        "--slack-channel", help="Slack channel to post results and notifications to",
-    )
-    parser.add_argument(
-        "--chunk-size",
-        help="Chunk size to use for combining VCFs (the number of individual VCFs that should be combined at a time)",
-        type=int,
-        default=100,
-    )
-    parser.add_argument(
-        "--overwrite", help="Overwrites existing files", action="store_true"
-    )
-    parser.add_argument(
-        "--expect-shifted", action="store_true"
+        "--numt-only", help="If enabled, outputs a NUMT only table of the statistic as a function of sample and target.", action='store_true'
     )
 
     args = parser.parse_args()
-
-    # Both a slack token and slack channel must be supplied to receive notifications on slack
-    if args.slack_channel and args.slack_token:
-        with slack_notifications(args.slack_token, args.slack_channel):
-            main(args)
-    else:
-        main(args)
+    main(args)
