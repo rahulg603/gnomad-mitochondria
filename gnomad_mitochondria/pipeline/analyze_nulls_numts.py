@@ -96,9 +96,9 @@ def main(args):  # noqa: D103
         mt_numt_ct = mt_numt_ct.select_entries(p_val_hi = mt_numt_ct.null_hi.filter(lambda x: x > mt_numt_ct.prop_hi).length()/mt_numt_ct.null_hi.length(),
                                             p_val_lo = mt_numt_ct.null_lo.filter(lambda x: x > mt_numt_ct.prop_lo).length()/mt_numt_ct.null_lo.length())
         ht_out = mt_numt_ct.entries()
-        ht_out.export(args.o)
+        ht_out.export(args.output_tsv)
     else:
-        mt_numt_ct.entries().export(args.o)
+        mt_numt_ct.entries().export(args.output_tsv)
 
 
 if __name__ == "__main__":
