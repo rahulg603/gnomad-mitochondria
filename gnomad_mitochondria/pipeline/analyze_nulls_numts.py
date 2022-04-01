@@ -1,6 +1,8 @@
 import argparse
 import hail as hl
 
+suffix_dict = {'':0.025, '_1e_neg6':1e-6, '_1e_neg4':1e-4, '_bonf':3e-9}
+
 def prune_by_intervals(mt, bases):
     ht = mt.rows()
     ht_locs = ht.group_by(ht.target).aggregate(min_pos = hl.agg.min(ht.locus.position) + bases, 
@@ -19,16 +21,20 @@ def annotate_by_pois(mt):
     # Determines if a sample has coverage that is too high or low using a Poisson distribution
     mt = mt.annotate_entries(p_hi = hl.ppois(mt.coverage, mt.mean_coverage, lower_tail=False),
                              p_lo = hl.ppois(mt.coverage, mt.mean_coverage, lower_tail=True))
-    mt = mt.annotate_entries(is_hi = mt.p_hi <= 0.025, is_lo = mt.p_lo <= 0.025)
+    mt = mt.annotate_entries(**{"is_hi" + k: mt.p_hi <= v for k,v in suffix_dict.items()})
+    mt = mt.annotate_entries(**{"is_lo" + k: mt.p_lo <= v for k,v in suffix_dict.items()})
+    
     return mt
 
 
 def get_per_target_stats(mt):
+    suffixes = suffix_dict.keys()
     mt = mt.group_rows_by(mt.target
           ).aggregate_rows(N = hl.agg.count()
-          ).aggregate_entries(N_hi = hl.agg.count_where(mt.is_hi), 
-                              N_lo = hl.agg.count_where(mt.is_lo)).result()
-    mt = mt.annotate_entries(prop_hi = mt.N_hi/mt.N, prop_lo = mt.N_lo/mt.N)
+          ).aggregate_entries(**({'N_hi' + suffix: hl.agg.count_where(mt['is_hi' + suffix]) for suffix in suffixes} + \
+                                 {'N_lo' + suffix: hl.agg.count_where(mt['is_lo' + suffix]) for suffix in suffixes})).result()
+    mt = mt.annotate_entries(**({'prop_hi' + suffix: mt['N_hi' + suffix]/mt.N for suffix in suffixes} + \
+                                {'prop_lo' + suffix: mt['N_lo' + suffix]/mt.N for suffix in suffixes}))
     return mt
 
 
