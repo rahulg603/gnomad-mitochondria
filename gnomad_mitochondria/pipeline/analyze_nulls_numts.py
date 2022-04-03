@@ -4,13 +4,13 @@ import hail as hl
 suffix_dict = {'':0.025, '_1e_neg6':1e-6, '_1e_neg4':1e-4, '_bonf':3e-9}
 
 def prune_by_intervals(mt, bases):
-    ht = mt.rows()
+    ht_annot = mt.rows()
     #ht_locs = ht.group_by(ht.target).aggregate(min_pos = hl.agg.min(ht.locus.position) + bases, 
     #                                           min_pos_500 = hl.agg.min(ht.locus.position) + 500,
     #                                           max_pos = hl.agg.max(ht.locus.position) - bases,
     #                                           max_pos_500 = hl.agg.max(ht.locus.position) - 500)
     
-    ht_annot = ht.annotate(**ht_locs[ht.target])
+    #ht_annot = ht.annotate(**ht_locs[ht.target])
     ht_annot = ht_annot.annotate(split_target = ht_annot.target.split('\\|'))
     ht_annot = ht_annot.annotate(split_positions = hl.map(lambda x: x.replace('^.+_(?=[0-9]{1,20}_[0-9]{1,20}_500bp)','').replace('_500bp','').split('_')[0:2], ht_annot.split_target))
     ht_annot = ht_annot.annotate(expected_min_pos = hl.min(hl.map(lambda x: hl.int32(x[0]), ht_annot.split_positions)),
