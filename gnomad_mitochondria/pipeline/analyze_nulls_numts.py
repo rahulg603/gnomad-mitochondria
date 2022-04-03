@@ -1,7 +1,7 @@
 import argparse
 import hail as hl
 
-suffix_dict = {'':0.025, '_1e_neg6':1e-6, '_1e_neg4':1e-4, '_bonf':3e-9}
+suffix_dict = {'':0.025, '_5e_neg5': 5e-5, '_1e_neg6':1e-6, '_1e_neg4':1e-4, '_bonf':3e-9}
 
 def prune_by_intervals(mt, bases):
     ht_annot = mt.rows()
