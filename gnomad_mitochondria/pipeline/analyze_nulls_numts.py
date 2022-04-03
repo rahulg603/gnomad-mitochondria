@@ -5,14 +5,24 @@ suffix_dict = {'':0.025, '_1e_neg6':1e-6, '_1e_neg4':1e-4, '_bonf':3e-9}
 
 def prune_by_intervals(mt, bases):
     ht = mt.rows()
-    ht_locs = ht.group_by(ht.target).aggregate(min_pos = hl.agg.min(ht.locus.position) + bases, 
-                                               max_pos = hl.agg.max(ht.locus.position) - bases)
-    
-    if ht_locs.filter(ht_locs.min_pos > ht_locs.max_pos).count() > 0:
-        raise ValueError('ERROR: there are intervals where the number of bases to drop is greater than the total interval size.')
+    #ht_locs = ht.group_by(ht.target).aggregate(min_pos = hl.agg.min(ht.locus.position) + bases, 
+    #                                           min_pos_500 = hl.agg.min(ht.locus.position) + 500,
+    #                                           max_pos = hl.agg.max(ht.locus.position) - bases,
+    #                                           max_pos_500 = hl.agg.max(ht.locus.position) - 500)
     
     ht_annot = ht.annotate(**ht_locs[ht.target])
-    ht_annot = ht_annot.filter((ht_annot.locus.position >= ht_annot.min_pos) & (ht_annot.locus.position <= ht_annot.max_pos))
+    ht_annot = ht_annot.annotate(split_target = ht_annot.target.split('\\|'))
+    ht_annot = ht_annot.annotate(split_positions = hl.map(lambda x: x.replace('^.+_(?=[0-9]{1,20}_[0-9]{1,20}_500bp)','').replace('_500bp','').split('_')[0:2], ht_annot.split_target))
+    ht_annot = ht_annot.annotate(expected_min_pos = hl.min(hl.map(lambda x: hl.int32(x[0]), ht_annot.split_positions)),
+                                 expected_max_pos = hl.max(hl.map(lambda x: hl.int32(x[1]), ht_annot.split_positions)))
+    ht_annot = ht_annot.annotate(max_pos = ht_annot.expected_max_pos + 500 - bases,
+                                 min_pos = ht_annot.expected_min_pos - 500 + bases)
+
+    if ht_annot.filter(ht_annot.min_pos > ht_annot.max_pos).count() > 0:
+        raise ValueError('ERROR: there are intervals where the number of bases to drop is greater than the total interval size.')
+    
+    ht_annot = ht_annot.filter(((ht_annot.locus.position >= ht_annot.min_pos)) & \
+                               (ht_annot.locus.position <= ht_annot.max_pos))
     mt = mt.semi_join_rows(ht_annot)
     return mt
 
@@ -83,6 +93,7 @@ def main(args):  # noqa: D103
     # bases = 500
     # nulls = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/test_null/annotated_file_coverage_null.mt"
     # numts = "gs://fc-secure-f0dd1b4e-d639-4a0c-8712-6d02e9d8981a/test_null/annotated_file_coverage_numts.mt"
+
 
     ht_qc = hl.import_table(qc, impute=True)
     ht_qc = ht_qc.select(s = ht_qc['entity:qc_result_sample_id'], mean_coverage=ht_qc.mean_coverage).key_by('s')
