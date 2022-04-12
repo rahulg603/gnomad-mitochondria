@@ -19,7 +19,7 @@ logger = logging.getLogger("Annotate coverage")
 logger.setLevel(logging.INFO)
 
 
-def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int) -> hl.MatrixTable:
+def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partitions: int) -> hl.MatrixTable:
     """
     Hierarchically join together MatrixTables in the provided list.
 
@@ -46,6 +46,8 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int) -> hl.MatrixT
 
             # Multiway zip join will produce an __entries annotation, which is an array where each element is a struct containing the __entries annotation (array of structs) for that sample
             merged = hl.Table.multi_way_zip_join(to_merge, "__entries", "__cols")
+            if min_partitions > 10:
+                merged = merged.checkpoint(f"stage_{stage}_job_{i}_pre.ht", overwrite=True)
             # Flatten __entries while taking into account different entry lengths at different samples/variants (samples lacking a variant will be NA)
             merged = merged.annotate(
                 __entries=hl.flatten(
@@ -93,6 +95,7 @@ def main(args):  # noqa: D103
     chunk_size = args.chunk_size
     overwrite = args.overwrite
     expect_shifted = args.expect_shifted
+    keep_targets = args.keep_targets
 
     if args.overwrite == False and hl.hadoop_exists(output_ht):
         logger.warning(
@@ -121,7 +124,12 @@ def main(args):  # noqa: D103
                 delimiter="\t",
                 types=typedict,
                 key=["chrom", "pos"],
-            ).drop("target")
+                min_partitions=args.n_read_partitions
+            )
+            if not keep_targets:
+                ht = ht.drop("target")
+            else:
+                ht = ht.key_rows_by(*["chrom", "pos", "target"])
             mt1 = ht.select('coverage_original').to_matrix_table_row_major(columns = ['coverage_original'], entry_field_name = 'coverage_original', col_field_name='s')
             mt2 = ht.select('coverage_remapped_self').to_matrix_table_row_major(columns = ['coverage_remapped_self'], entry_field_name = 'coverage_remapped_self', col_field_name='s')
             mt1 = mt1.key_cols_by(s=sample)
@@ -136,7 +144,7 @@ def main(args):  # noqa: D103
     logger.info("Joining individual coverage mts...")
     out_dir = dirname(output_ht)
 
-    cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size)
+    cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions)
     n_samples = cov_mt.count_cols()
 
     logger.info("Adding coverage annotations...")
@@ -162,12 +170,13 @@ def main(args):  # noqa: D103
     output_samples_orig = re.sub(r"\.ht$", "_original_sample_level.txt", output_ht)
     output_samples_remap = re.sub(r"\.ht$", "_remapped_sample_level.txt", output_ht)
 
-    logger.info("Writing sample level coverage...")
-    sample_mt = cov_mt.key_rows_by(pos=cov_mt.locus.position)
-    sample_mt.coverage_original.export(output_samples_orig)
-    sample_mt.coverage_remapped_self.export(output_samples_remap)
-    if expect_shifted:
-        sample_mt.coverage_remapped_self_shifted.export(re.sub(r"\.ht$", "_remapped_shifted_sample_level.txt", output_ht))
+    if not args.hail_only:
+        logger.info("Writing sample level coverage...")
+        sample_mt = cov_mt.key_rows_by(pos=cov_mt.locus.position)
+        sample_mt.coverage_original.export(output_samples_orig)
+        sample_mt.coverage_remapped_self.export(output_samples_remap)
+        if expect_shifted:
+            sample_mt.coverage_remapped_self_shifted.export(re.sub(r"\.ht$", "_remapped_shifted_sample_level.txt", output_ht))
 
     logger.info("Writing coverage mt and ht...")
     cov_mt.write(output_mt, overwrite=overwrite)
@@ -212,6 +221,15 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--expect-shifted", action="store_true"
+    )   
+    parser.add_argument(
+        "--keep-targets", help="Will add an annotation for target from the coverage file", action="store_true"
+    ) 
+    parser.add_argument(
+        "--n-read-partitions", type=int, help="The number of partitions to use when reading tsvs. This should be 1 if the files are small.", default=1
+    )
+    parser.add_argument(
+        "--hail-only", action='store_true', help='Skip generating flat files.'
     )
 
     args = parser.parse_args()
