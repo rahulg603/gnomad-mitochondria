@@ -129,7 +129,7 @@ def main(args):  # noqa: D103
             if not keep_targets:
                 ht = ht.drop("target")
             else:
-                ht = ht.key_rows_by(*["chrom", "pos", "target"])
+                ht = ht.key_by(*["chrom", "pos", "target"])
             mt1 = ht.select('coverage_original').to_matrix_table_row_major(columns = ['coverage_original'], entry_field_name = 'coverage_original', col_field_name='s')
             mt2 = ht.select('coverage_remapped_self').to_matrix_table_row_major(columns = ['coverage_remapped_self'], entry_field_name = 'coverage_remapped_self', col_field_name='s')
             mt1 = mt1.key_cols_by(s=sample)
