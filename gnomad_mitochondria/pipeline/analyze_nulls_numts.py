@@ -3,20 +3,24 @@ import hail as hl
 
 suffix_dict = {'':0.025, '_5e_neg5': 5e-5, '_1e_neg6':1e-6, '_1e_neg4':1e-4, '_bonf':3e-9}
 
-def prune_by_intervals(mt, bases):
+def prune_by_intervals(mt, bases, dont_parse_name=False):
     ht_annot = mt.rows()
-    #ht_locs = ht.group_by(ht.target).aggregate(min_pos = hl.agg.min(ht.locus.position) + bases, 
-    #                                           min_pos_500 = hl.agg.min(ht.locus.position) + 500,
-    #                                           max_pos = hl.agg.max(ht.locus.position) - bases,
-    #                                           max_pos_500 = hl.agg.max(ht.locus.position) - 500)
-    
-    #ht_annot = ht.annotate(**ht_locs[ht.target])
-    ht_annot = ht_annot.annotate(split_target = ht_annot.target.split('\\|'))
-    ht_annot = ht_annot.annotate(split_positions = hl.map(lambda x: x.replace('^.+_(?=[0-9]{1,20}_[0-9]{1,20}_500bp)','').replace('_500bp','').split('_')[0:2], ht_annot.split_target))
-    ht_annot = ht_annot.annotate(expected_min_pos = hl.min(hl.map(lambda x: hl.int32(x[0]), ht_annot.split_positions)),
-                                 expected_max_pos = hl.max(hl.map(lambda x: hl.int32(x[1]), ht_annot.split_positions)))
-    ht_annot = ht_annot.annotate(max_pos = ht_annot.expected_max_pos + 500 - bases,
-                                 min_pos = ht_annot.expected_min_pos - 500 + bases)
+
+    if dont_parse_name:
+        ht_locs = ht_annot.group_by(ht_annot.target
+                         ).aggregate(min_pos = hl.agg.min(ht_annot.locus.position) + bases, 
+                                     min_pos_500 = hl.agg.min(ht_annot.locus.position) + 500,
+                                     max_pos = hl.agg.max(ht_annot.locus.position) - bases,
+                                     max_pos_500 = hl.agg.max(ht_annot.locus.position) - 500)
+        ht_annot = ht_annot.annotate(**ht_locs[ht_annot.target])
+
+    else:
+        ht_annot = ht_annot.annotate(split_target = ht_annot.target.split('\\|'))
+        ht_annot = ht_annot.annotate(split_positions = hl.map(lambda x: x.replace('^.+_(?=[0-9]{1,20}_[0-9]{1,20}_500bp)','').replace('_500bp','').split('_')[0:2], ht_annot.split_target))
+        ht_annot = ht_annot.annotate(expected_min_pos = hl.min(hl.map(lambda x: hl.int32(x[0]), ht_annot.split_positions)),
+                                    expected_max_pos = hl.max(hl.map(lambda x: hl.int32(x[1]), ht_annot.split_positions)))
+        ht_annot = ht_annot.annotate(max_pos = ht_annot.expected_max_pos + 500 - bases,
+                                    min_pos = ht_annot.expected_min_pos - 500 + bases)
 
     if ht_annot.filter(ht_annot.min_pos > ht_annot.max_pos).count() > 0:
         raise ValueError('ERROR: there are intervals where the number of bases to drop is greater than the total interval size.')
@@ -104,7 +108,7 @@ def main(args):  # noqa: D103
     mt_numt_ct = get_per_target_stats(mt_numt)
 
     if not numt_only:
-        mt_null = prune_by_intervals(hl.read_matrix_table(nulls), bases)
+        mt_null = prune_by_intervals(hl.read_matrix_table(nulls), bases, dont_parse_name=True)
         mt_null = mt_null.annotate_cols(mean_coverage = ht_qc[mt_null.col_key].mean_coverage)
         mt_null = annotate_by_pois(mt_null)
         mt_null_ct = get_nulls(mt_numt_ct, mt_null, tmp)
