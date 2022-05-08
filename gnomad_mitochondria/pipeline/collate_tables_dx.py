@@ -24,7 +24,8 @@ def make_input_json(d, fl_out="sample.json"):
 
 def make_keyed_df(key, lst, key_to_suffix):
     df = pd.DataFrame({key: lst})
-    df['s'] = df[key].apply(os.path.basename).str.replace(key_to_suffix[key]+'$',"")
+    df['s'] = df[key].apply(os.path.basename)
+    df['s'] = df['s'].str.replace(key_to_suffix[key]+'$',"")
     return df
 
 
@@ -214,34 +215,42 @@ def custom_download_all_inputs(input_links, suffix_key, exclude=None, parallel=F
     return joint_table
 
 
-def import_and_cat_tables(directory_df, id_col, path_col, new_id_col, append_ids_and_t=False, max_threads=8, filter_by=None):
+def import_and_cat_tables(directory_df, id_col, path_col, new_id_col, append_ids_and_t=False, max_threads=8, filter_by=None, enforce_nonmiss=False):
     ids = [x for _, x in directory_df[id_col].iteritems()]
     directories = [x for _, x in directory_df[path_col].iteritems()]
     p = multiprocessing.Pool(processes=max_threads)
 
     to_subset_to = filter_by if filter_by is not None else ids
+    empty_df = pd.DataFrame({new_id_col:[]})
 
     if append_ids_and_t:
         df_from_each_file = p.map(reader1, [(idx, f) for idx, f in zip(ids, directories) if idx in to_subset_to])
-        concatenated_df = pd.concat(df_from_each_file, ignore_index=True, axis=0)
-        concatenated_df = concatenated_df.rename({'newcolthis': new_id_col}, axis=1)
+        if len(df_from_each_file) == 0:
+            concatenated_df = empty_df
+        else:
+            concatenated_df = pd.concat(df_from_each_file, ignore_index=True, axis=0)
+            concatenated_df = concatenated_df.rename({'newcolthis': new_id_col}, axis=1)
     else:
         df_from_each_file = p.map(reader2, [f for idx, f in zip(ids, directories) if idx in to_subset_to])
-        concatenated_df = pd.concat(df_from_each_file, ignore_index=True, axis=0)
+        if len(df_from_each_file) == 0:
+            concatenated_df = empty_df
+        else:
+            concatenated_df = pd.concat(df_from_each_file, ignore_index=True, axis=0)
 
     # ensure that all ids are found in the new df
-    new_ids = [x for _, x in concatenated_df[new_id_col].iteritems()]
-    tf_found_new = all([x_old in new_ids for x_old in ids])
-    tf_found_old = all([x_new in ids for x_new in new_ids])
-    if not (tf_found_new and tf_found_old):
-        raise ValueError('ERROR: the list of individuals in directory_df must be the same as that obtained from the read tables.')
+    if enforce_nonmiss:
+        new_ids = [x for _, x in concatenated_df[new_id_col].iteritems()]
+        tf_found_new = all([x_old in new_ids for x_old in ids])
+        tf_found_old = all([x_new in ids for x_new in new_ids])
+        if not (tf_found_new and tf_found_old):
+            raise ValueError('ERROR: the list of individuals in directory_df must be the same as that obtained from the read tables.')
     
     return concatenated_df.reset_index(drop=True)
 
 
-def fuse_find_data_objects(folder, suffix):
+def fuse_find_data_objects(folder, suffix, recursive=True):
     path_search = FUSE_PREFIX + folder + '**/*' + suffix
-    identified_objects = glob.glob(path_search, recursive=True)
+    identified_objects = glob.glob(path_search, recursive=recursive)
     return identified_objects
 
 
@@ -271,24 +280,26 @@ def run_describe(lst):
 def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, qc_stats_folder, qc_suffix,
          vcf_merging_output, coverage_calling_output):
     # download mito pipeline data
-    data_dict = {'vcf': fuse_find_data_objects(pipeline_output_folder, vcf_suffix), 
-                 'coverage': fuse_find_data_objects(pipeline_output_folder, coverage_suffix),
-                 'stats': fuse_find_data_objects(pipeline_output_folder, mtstats_suffix)}
+    data_dict = {'vcf': fuse_find_data_objects(pipeline_output_folder, vcf_suffix, False), 
+                 'coverage': fuse_find_data_objects(pipeline_output_folder, coverage_suffix, False),
+                 'stats': fuse_find_data_objects(pipeline_output_folder, mtstats_suffix, False)}
     downloaded_files = produce_fuse_file_table(data_dict, {'vcf':vcf_suffix, 'coverage':coverage_suffix, 'stats':mtstats_suffix})
 
     # read qc metrics
-    data_dict_qc = {'qc': fuse_find_data_objects(qc_stats_folder, qc_suffix)}
+    data_dict_qc = {'qc': fuse_find_data_objects(qc_stats_folder, qc_suffix, False)}
     downloaded_qc_files = produce_fuse_file_table(data_dict_qc, {'qc':qc_suffix})
 
     # import stats and qc and merge all into table
-    stats_table = import_and_cat_tables(downloaded_files, 's', 'stats', 's')
+    stats_table = import_and_cat_tables(downloaded_files, 's', 'stats', 's', enforce_nonmiss=True)
     qc_table = import_and_cat_tables(downloaded_qc_files, 's', 'qc', 's', append_ids_and_t=True, filter_by=list(stats_table['s']))
-    final_analysis_table = stats_table.merge(qc_table, how='inner', on='s').merge(downloaded_files, how='inner', on='s')
+    final_analysis_table = stats_table.merge(qc_table, how='outer', on='s').merge(downloaded_files, how='inner', on='s')
 
     # produce tables for coverage and VCF merging
     final_analysis_table["s_2"] = final_analysis_table["s"]
-    table_cov = final_analysis_table["s", "coverage", "s_2"].rename({'s':'collaborator_participant_id', 'coverage':'base_coverage'}).rename({'s_2':'s'})
+    table_cov = final_analysis_table[["s", "coverage", "s_2"]].rename({'s':'collaborator_participant_id', 'coverage':'base_coverage'}).rename({'s_2':'s'})
+    table_cov['coverage'] = 'file:///' + table_cov['coverage']
     table_vcf = final_analysis_table.rename({'s_2':'entity:participant_id'})
+    table_vcf['vcf'] = 'file:///' + table_vcf['vcf']
 
     # output
     table_cov.to_csv(coverage_calling_output, sep='\t', index=False)
@@ -314,6 +325,14 @@ parser.add_argument('--qc-stats-folder', type=str, default='/Bulk/Whole genome s
 parser.add_argument('--qc-suffix', type=str, default='.qaqc_metrics',
                     help="Suffix of each WGS QC file to import. Assumes that this file contains multiple rows for a single sample.")
 
+pipeline_output_folder = '220403_mitopipeline_v2_2_ukb_trial/'
+vcf_suffix = '.self.ref.final.split.selfToRef.final.vcf'
+coverage_suffix = '_per_base_coverage.appended.liftedOver.tsv'
+mtstats_suffix = '_mtanalysis_diagnostic_statistics.tsv'
+qc_stats_folder = '/Bulk/Whole genome sequences/Concatenated QC Metrics/'
+qc_suffix = '.qaqc_metrics'
+vcf_merging_output = 'tab_vcf_merging.tsv'
+coverage_calling_output = 'tab_coverage.tsv'
 
 if __name__ == '__main__':
     args = parser.parse_args()
