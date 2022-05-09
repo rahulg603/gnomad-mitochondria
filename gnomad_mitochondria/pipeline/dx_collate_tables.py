@@ -2,6 +2,7 @@ import hail as hl
 import pandas as pd
 import argparse
 import dxpy
+import pyspark
 import psutil, multiprocessing
 import json
 import sys, os, glob
@@ -278,7 +279,14 @@ def run_describe(lst):
 
 
 def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, qc_stats_folder, qc_suffix,
-         vcf_merging_output, coverage_calling_output):
+         vcf_merging_output, coverage_calling_output, dx_init):
+
+    # start SQL session
+    my_database = dxpy.find_one_data_object(name=dx_init)["id"]
+    sc = pyspark.SparkContext()
+    spark = pyspark.sql.SparkSession(sc)
+    hl.init(sc=sc, tmp_dir=f'dnax://{my_database}/tmp/')
+
     # download mito pipeline data
     data_dict = {'vcf': fuse_find_data_objects(pipeline_output_folder, vcf_suffix, False), 
                  'coverage': fuse_find_data_objects(pipeline_output_folder, coverage_suffix, False),
@@ -305,6 +313,12 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, qc
     table_cov.to_csv(coverage_calling_output, sep='\t', index=False)
     table_vcf.to_csv(vcf_merging_output, sep='\t', index=False)
 
+    # output to sql
+    ht_cov = hl.Table.from_pandas(table_cov)
+    ht_cov.export(f'dnax://{my_database}/{coverage_calling_output}')
+    ht_vcf = hl.Table.from_pandas(table_vcf)
+    ht_vcf.export(f'dnax://{my_database}/{vcf_merging_output}')
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--pipeline-output-folder', type=str, required=True, 
@@ -313,6 +327,8 @@ parser.add_argument('--vcf-merging-output', type=str, required=True,
                     help="Local path to tsv to output which will contain all fields and will be usable for VCF merging.")
 parser.add_argument('--coverage-calling-output', type=str, required=True, 
                     help="Local path to tsv to output which will contain 3 fields pointing to mtDNA per-base coverage for merging.")
+parser.add_argument('--dx-init', type=str, required=True,
+                    help='SQL database path for use in DNAnexus.')
 
 parser.add_argument('--vcf-suffix', type=str, default='.self.ref.final.split.selfToRef.final.vcf',
                     help="Suffix of each final VCF to import.")

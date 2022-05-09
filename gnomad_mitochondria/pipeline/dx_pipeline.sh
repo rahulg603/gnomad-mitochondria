@@ -12,29 +12,32 @@ mv gnomad-mitochondria gnomad_mitochondria_hold
 mv gnomad_mitochondria_hold/gnomad_mitochondria ./
 cd gnomad_mitochondria/pipeline/
 
-python collate_tables_dx.py \
---pipeline-output-folder '220403_mitopipeline_v2_2_ukb_trial/' \
+python dx_provision_sql.py --dx-init 220507_mitopipeline_v2_2_ukb_trial
+
+python dx_collate_tables.py \
+--pipeline-output-folder '220507_mitopipeline_v2_2_ukb_trial/' \
 --vcf-merging-output 'tab_vcf_merging.tsv' \
---coverage-calling-output 'tab_coverage.tsv'
+--coverage-calling-output 'tab_coverage.tsv' \
+--dx-init 220507_mitopipeline_v2_2_ukb_trial
 
-mkdir pipelineworkingdir
-mkdir pipelineworkingdir/tmp
-mkdir pipelineworkingdir/coverage
-mkdir pipelineworkingdir/vcf
+dx upload tab_vcf_merging.tsv --path /220507_mitopipeline_v2_2_ukb_trial/merging/tab_vcf_merging.tsv
+dx upload tab_coverage.tsv --path /220507_mitopipeline_v2_2_ukb_trial/merging/tab_coverage.tsv
 
-python annotate_coverage.py \
--i "file:///${PWD}/tab_coverage.tsv" \
--o "file:///${PWD}/pipelineworkingdir/coverage/testing_pipeline_trial_ukb_coverage.ht" \
--t "pipelineworkingdir/tmp/" \
---overwrite
+python dx_annotate_coverage.py \
+-i "tab_coverage.tsv" \
+-o "coverage/testing_pipeline_trial_ukb_coverage.ht" \
+-t "tmp/" \
+--overwrite \
+--dx-init 220507_mitopipeline_v2_2_ukb_trial
 
-python combine_vcfs.py \
--p "file:///${PWD}/tab_vcf_merging.tsv" \
--c "file:///${PWD}/pipelineworkingdir/coverage/testing_pipeline_trial_ukb_coverage.mt" \
+python dx_combine_vcfs.py \
+-p "tab_vcf_merging.tsv" \
+-c "coverage/testing_pipeline_trial_ukb_coverage.mt" \
 -v vcf \
 -a 'file:///mnt/project/reference/grch38_genome/blacklist_sites.hg38.chrM.bed' \
 -a-ref GRCh38 \
--o "file:///${PWD}/pipelineworkingdir/vcf/" \
--t "pipelineworkingdir/tmp/" \
+-o "vcf/" \
+-t "tmp/" \
 -f 220506_testing_ukb_pipeline_variants \
---overwrite --include-extra-v2-fields
+--overwrite --include-extra-v2-fields \
+--dx-init 220507_mitopipeline_v2_2_ukb_trial
