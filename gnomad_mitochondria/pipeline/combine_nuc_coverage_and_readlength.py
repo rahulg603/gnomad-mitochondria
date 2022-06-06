@@ -131,20 +131,19 @@ def main(args):  # noqa: D103
         path_lens = lens_load[sample]
 
         ht_idx = hl.import_table(path_idx, no_header=True, impute=True, min_partitions=args.n_read_partitions
-                                ).rename({'f0': 'chrom', 'f1': 'chrom_len', 'f2':'mapped_reads', 'f3': 'unampped_reads'}
+                                ).rename({'f0': 'chrom', 'f1': 'chrom_len', 'f2':'mapped_reads', 'f3': 'unmampped_reads'}
                                 ).key_by('chrom')
         ht_idx = ht_idx.annotate(s=sample)
         mt_idx = ht_idx.to_matrix_table(row_key=['chrom'], col_key=['s'], row_fields=['chrom_len']).persist()
-        #mt_idx = mt_idx.checkpoint(os.path.join(temp_dir, f"samplemt_{str(sample)}.mt"), overwrite=True)
         mt_list.append(mt_idx)
 
         ht_len = hl.import_table(path_lens, impute=True).annotate(s=sample).key_by('s')
         ht_list.append(ht_len)
 
-    # if len(ht_list) > 1:
-    #     ht_read_lens = ht_list[0].union(*ht_list[1:len(ht_list)])
-    # else:
-    #     ht_read_lens = ht_list[0]
+    if len(ht_list) > 1:
+        ht_read_lens = ht_list[0].union(*ht_list[1:len(ht_list)])
+    else:
+        ht_read_lens = ht_list[0]
 
     logger.info("Joining individual coverage mts...")
 
