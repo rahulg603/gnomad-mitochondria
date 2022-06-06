@@ -48,8 +48,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partition
 
             # Multiway zip join will produce an __entries annotation, which is an array where each element is a struct containing the __entries annotation (array of structs) for that sample
             merged = hl.Table.multi_way_zip_join(to_merge, "__entries", "__cols")
-            if min_partitions > 10:
-                merged = merged.checkpoint(f"stage_{stage}_job_{i}_pre.ht", overwrite=True)
+            merged = merged.checkpoint(f"stage_{stage}_job_{i}_pre.ht", overwrite=True)
             # Flatten __entries while taking into account different entry lengths at different samples/variants (samples lacking a variant will be NA)
             merged = merged.annotate(
                 __entries=hl.flatten(
@@ -144,7 +143,7 @@ def main(args):  # noqa: D103
         ht_read_lens = ht_list[0].union(*ht_list[1:len(ht_list)])
     else:
         ht_read_lens = ht_list[0]
-
+    ht_read_lens = ht_read_lens.checkpoint(os.path.join(temp_dir, f"read_lengths_temp.ht"))
     logger.info("Joining individual coverage mts...")
 
     cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions)
