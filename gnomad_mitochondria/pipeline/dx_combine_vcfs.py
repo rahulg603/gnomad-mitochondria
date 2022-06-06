@@ -6,7 +6,6 @@ import dxpy
 import pyspark
 
 import hail as hl
-from hail.utils.java import info
 from typing import Dict
 
 META_DICT = {
@@ -40,13 +39,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("combine_mitochondria_vcfs_into_mt")
 logger.setLevel(logging.INFO)
-
-if int(hl.version().split('-')[0].split('.')[2]) >= 75: # only use this if using hail 0.2.75 or greater
-    logger.info("Setting hail flag to avoid array index out of bounds error...")
-    # Setting this flag isn't generally recommended, but is needed (since at least Hail version 0.2.75) to avoid an array index out of bounds error until changes are made in future versions of Hail
-    # TODO: reassess if this flag is still needed for future versions of Hail
-    hl._set_flags(no_whole_stage_codegen="1")
-
 
 def collect_vcf_paths(
     participant_data: str, vcf_col_name: str, participants_to_subset: str = None,
@@ -107,13 +99,13 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int) -> hl.MatrixT
     while len(staging) > 1:
         # Calculate the number of jobs to run based on the chunk size
         n_jobs = int(math.ceil(len(staging) / chunk_size))
-        info(f"multi_way_union_mts: stage {stage}: {n_jobs} total jobs")
+        hl.utils.java.info(f"multi_way_union_mts: stage {stage}: {n_jobs} total jobs")
         next_stage = []
 
         for i in range(n_jobs):
             # Grab just the tables for the given job
             to_merge = staging[chunk_size * i : chunk_size * (i + 1)]
-            info(
+            hl.utils.java.info(
                 f"multi_way_union_mts: stage {stage} / job {i}: merging {len(to_merge)} inputs"
             )
 
@@ -146,7 +138,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int) -> hl.MatrixT
                     os.path.join(temp_dir, f"stage_{stage}_job_{i}.ht"), overwrite=True
                 )
             )
-        info(f"Completed stage {stage}")
+        hl.utils.java.info(f"Completed stage {stage}")
         stage += 1
         staging.clear()
         staging.extend(next_stage)
@@ -367,7 +359,7 @@ def main(args):  # noqa: D103
     coverage_mt_path = f'dnax://{my_database}/{args.coverage_mt_path}/'
     output_bucket = f'dnax://{my_database}/{args.output_bucket}'
     temp_dir = f'dnax://{my_database}/{args.temp_dir}/'
-    participants_to_subset = f'dnax://{my_database}/{args.participants_to_subset}'
+    participants_to_subset = None if args.participants_to_subset is None else f'dnax://{my_database}/{args.participants_to_subset}'
     chunk_size = args.chunk_size
     artifact_prone_sites_path = args.artifact_prone_sites_path
     artifact_prone_sites_reference = args.artifact_prone_sites_reference
@@ -378,6 +370,12 @@ def main(args):  # noqa: D103
     sc = pyspark.SparkContext()
     spark = pyspark.sql.SparkSession(sc)
     hl.init(sc=sc, tmp_dir=temp_dir)
+
+    if int(hl.version().split('-')[0].split('.')[2]) >= 75: # only use this if using hail 0.2.75 or greater
+        logger.info("Setting hail flag to avoid array index out of bounds error...")
+        # Setting this flag isn't generally recommended, but is needed (since at least Hail version 0.2.75) to avoid an array index out of bounds error until changes are made in future versions of Hail
+        # TODO: reassess if this flag is still needed for future versions of Hail
+        hl._set_flags(no_whole_stage_codegen="1")
 
     output_path_mt = f"{output_bucket}/raw_combined.mt"
 
