@@ -131,7 +131,7 @@ def main(args):  # noqa: D103
                                 ).rename({'f0': 'chrom', 'f1': 'chrom_len', 'f2':'mapped_reads', 'f3': 'unmampped_reads'}
                                 ).key_by('chrom')
         ht_idx = ht_idx.annotate(s=sample)
-        mt_idx = ht_idx.to_matrix_table(row_key=['chrom'], col_key=['s'], row_fields=['chrom_len']).persist()
+        mt_idx = ht_idx.to_matrix_table(row_key=['chrom'], col_key=['s'], row_fields=['chrom_len'])#.persist()
         mt_list.append(mt_idx)
 
         ht_len = hl.import_table(path_lens, impute=True).annotate(s=sample).key_by('s')
@@ -141,7 +141,7 @@ def main(args):  # noqa: D103
         ht_read_lens = ht_list[0].union(*ht_list[1:len(ht_list)])
     else:
         ht_read_lens = ht_list[0]
-    ht_read_lens = ht_read_lens.checkpoint(os.path.join(temp_dir, f"read_lengths_temp.ht"))
+    ht_read_lens = ht_read_lens.checkpoint(os.path.join(temp_dir, f"read_lengths_temp.ht"), overwrite=True)
     logger.info("Joining individual coverage mts...")
 
     cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions)
@@ -209,7 +209,7 @@ if __name__ == "__main__":
         "--head", default=None, type=int,
         help="Max number of records to process."
     )
-    parser.add_arugment(
+    parser.add_argument(
         '--filter-to-main-chrom', action='store_true', help="If enabled, will filter to main chromosomes only."
     )
     parser.add_argument(
