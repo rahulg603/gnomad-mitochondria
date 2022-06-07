@@ -18,8 +18,6 @@ logging.basicConfig(
 logger = logging.getLogger("Annotate coverage")
 logger.setLevel(logging.INFO)
 
-filter_to = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
-
 
 def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partitions: int) -> hl.MatrixTable:
     """
@@ -164,6 +162,15 @@ def main(args):  # noqa: D103
     output_tsv_cov = re.sub(r"\.ht$", "_mapped_read_counts.tsv", output_ht)
     output_filtered = re.sub(r"\.ht$", "_nuclearcoverages.tsv", output_ht)
 
+    if args.filter_to_main_chrom:
+        filter_to = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
+        if args.include_mtdna_cov:
+            filter_to = filter_to + ['chrM']
+    else:
+        filter_to = list(set(cov_mt_filt.chrom.collect()) - set(['chrM']))
+        if args.include_mtdna_cov:
+            filter_to = filter_to + ['chrM']
+
     if not args.hail_only:
         logger.info("Writing per_sample information...")
         cov_mt_filt = cov_mt.filter_rows(hl.literal(filter_to).contains(cov_mt.chrom))
@@ -201,6 +208,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--head", default=None, type=int,
         help="Max number of records to process."
+    )
+    parser.add_arugment(
+        '--filter-to-main-chrom', action='store_true', help="If enabled, will filter to main chromosomes only."
+    )
+    parser.add_argument(
+        "--include-mtdna-cov", action='store_true', help='If enabled will include mtDNA in genome coverage estimates.'
     )
     parser.add_argument(
         "-o", "--output-ht", help="Name of ht to write output", required=True
