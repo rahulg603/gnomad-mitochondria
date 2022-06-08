@@ -163,9 +163,11 @@ def main(args):  # noqa: D103
     output_filtered = re.sub(r"\.ht$", "_nuclearcoverages.tsv", output_ht)
 
     if args.filter_to_main_chrom:
-        filter_to = ['chr' + str(x) for x in range(1, 23)] + ['chrX', 'chrY']
+        filter_to = ['chr' + str(x) for x in range(1, 23)]
         if args.include_mtdna_cov:
             filter_to = filter_to + ['chrM']
+        if args.include_sex_chr:
+            filter_to = filter_to + ['chrX', 'chrY']
     else:
         filter_to = list(set(cov_mt_filt.chrom.collect()) - set(['chrM']))
         if args.include_mtdna_cov:
@@ -175,7 +177,9 @@ def main(args):  # noqa: D103
         logger.info("Writing per_sample information...")
         cov_mt_filt = cov_mt.filter_rows(hl.literal(filter_to).contains(cov_mt.chrom))
         cov_mt_filt = cov_mt_filt.annotate_cols(total_mapped_reads = hl.agg.sum(cov_mt_filt.mapped_reads))
-        cov_ht_filt = cov_mt_filt.annotate_cols(nuclear_coverage = cov_mt_filt.total_mapped_reads * cov_mt_filt.READ_LENGTH / hl.agg.sum(cov_mt_filt.chrom_len)).cols()
+        cov_mt_filt = cov_mt_filt.annotate_cols(subtr_mapped_reads = cov_mt_filt.total_mapped_reads - cov_mt_filt.duplicates - cov_mt_filt.singletons - cov_mt_filt.mate_diff_chr)
+        cov_ht_filt = cov_mt_filt.annotate_cols(nuclear_coverage = cov_mt_filt.total_mapped_reads * cov_mt_filt.READ_LENGTH / hl.agg.sum(cov_mt_filt.chrom_len),
+                                                subtr_nuclear_coverage = cov_mt_filt.subtr_mapped_reads * cov_mt_filt.READ_LENGTH / hl.agg.sum(cov_mt_filt.chrom_len)).cols()
         cov_ht_filt.export(output_filtered)
 
     logger.info("Writing coverage mt and ht...")
@@ -214,6 +218,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--include-mtdna-cov", action='store_true', help='If enabled will include mtDNA in genome coverage estimates.'
+    )
+    parser.add_argument(
+        "--include-sex-chr", action='store_true', help='If enabled will include chrX and chrY. Only does anything if --filter-to-main-chrom is provided.'
     )
     parser.add_argument(
         "-o", "--output-ht", help="Name of ht to write output", required=True
