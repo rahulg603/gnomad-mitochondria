@@ -170,6 +170,7 @@ def join_mitochondria_vcfs_into_mt(
     :return: Joined MatrixTable of samples given in vcf_paths dictionary
     """
     mt_list = []
+    idx = 0
     for sample, vcf_path in vcf_paths.items():
         try:
             mt = hl.import_vcf(vcf_path, reference_genome="GRCh38")
@@ -178,6 +179,7 @@ def join_mitochondria_vcfs_into_mt(
                 f"vcf path {vcf_path} does not exist for sample {sample}"
             ) from e
 
+        idx+=1
         # Because the vcfs are split, there is only one AF value, although misinterpreted as an array because Number=A in VCF header
         # Second value of MMQ is the value of the mapping quality for the alternate allele
         # Add FT annotation for sample genotype filters (pull these from filters annotations of the single-sample VCFs)
@@ -208,6 +210,8 @@ def join_mitochondria_vcfs_into_mt(
         mt = mt.key_cols_by(s=sample)
         mt = mt.select_rows()
         mt_list.append(mt)
+        if idx % 500 == 0:
+            logger.info(f"Imported sample {str(idx)}...")
 
     combined_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size)
 
