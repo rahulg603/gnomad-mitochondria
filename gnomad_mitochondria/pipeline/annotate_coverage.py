@@ -109,9 +109,11 @@ def main(args):  # noqa: D103
     logger.info(
         "Reading in individual coverage files as matrix tables and adding to a list of matrix tables..."
     )
+    idx = 0
     with hl.hadoop_open(input_tsv, "r") as f:
         next(f)
         for line in f:
+            idx+=1
             line = line.rstrip()
             items = line.split("\t")
             participant_id, base_level_coverage_metrics, sample = items[0:3]
@@ -129,6 +131,8 @@ def main(args):  # noqa: D103
             mt = mt.rename({"x": "coverage"})
             mt = mt.key_cols_by(s=sample)
             mt_list.append(mt)
+            if idx % 500 == 0:
+                logger.info(f"Imported sample {str(idx)}...")
 
     logger.info("Joining individual coverage mts...")
     out_dir = dirname(output_ht)
