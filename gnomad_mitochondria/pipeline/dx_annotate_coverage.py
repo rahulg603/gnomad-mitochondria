@@ -92,7 +92,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partition
 
 def main(args):  # noqa: D103
     # start SQL session and initialize constants
-    my_database = dxpy.find_one_data_object(name=args.dx_init)["id"]
+    my_database = dxpy.find_one_data_object(name=args.dx_init.lower())["id"]
     input_tsv = f'dnax://{my_database}/{args.input_tsv}/'
     output_ht = f'dnax://{my_database}/{args.output_ht}'
     temp_dir = f'dnax://{my_database}/{args.temp_dir}/'

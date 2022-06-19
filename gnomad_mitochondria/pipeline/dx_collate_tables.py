@@ -259,10 +259,10 @@ def import_and_cat_tables(directory_df, id_col, path_col, new_id_col, append_ids
 
 
 def fuse_find_data_objects(folder, suffix, recursive=True):
-    folders = pipeline_output_folder.split(',')
+    folders = folder.split(',')
     identified_objects = []
-    for folder in folders:
-        path_search = FUSE_PREFIX + folder + '**/*' + suffix
+    for this_folder in folders:
+        path_search = FUSE_PREFIX + this_folder + '**/*' + suffix
         identified_objects+=glob.glob(path_search, recursive=recursive)
     return identified_objects
 
@@ -297,7 +297,7 @@ def compute_nuc_coverage(df, column_name):
 
 
 def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yield_suffix, idxstats_suffix, qc_stats_folder, qc_suffix,
-         vcf_merging_output, coverage_calling_output, dx_init, avoid_filtering_idxstats_chr):
+         file_paths_table_output, per_sample_stats_output, dx_init, avoid_filtering_idxstats_chr):
 
     # start SQL session
     my_database = dxpy.find_one_data_object(name=dx_init.lower())["id"]
@@ -336,7 +336,10 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     # import stats and qc and merge all into table
     stats_table = import_and_cat_tables(downloaded_files, 'batch', 'stats', 'batch', enforce_nonmiss=False)
     yield_table = import_and_cat_tables(downloaded_files, 'batch', 'yield', 'batch', enforce_nonmiss=False)
-    idxstats_table = import_and_cat_tables(downloaded_files, 'batch', 'idxstats', 'batch', enforce_nonmiss=False, filter_chr=AUTOSOMES)
+    if avoid_filtering_idxstats_chr:
+        idxstats_table = import_and_cat_tables(downloaded_files, 'batch', 'idxstats', 'batch', enforce_nonmiss=False)
+    else:
+        idxstats_table = import_and_cat_tables(downloaded_files, 'batch', 'idxstats', 'batch', enforce_nonmiss=False, filter_chr=AUTOSOMES)
 
     # produce munged idxstats table
     idxstats_summary = idxstats_table.groupby(idxstats_table['s']).agg(
@@ -346,37 +349,29 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     )
 
     qc_table = import_and_cat_tables(downloaded_qc_files, 's', 'qc', 's', append_ids_and_t=True, filter_by=list(stats_table['s']))
-    final_analysis_table = stats_table.merge(qc_table, how='outer', on='s'
-                                     ).merge(downloaded_files, how='inner', on='batch'
-                                     ).merge(yield_table, how='inner', on='s'
-                                     ).merge(idxstats_summary, how='inner', on='s')
-    final_analysis_table = compute_nuc_coverage(final_analysis_table, 'nuc_mean_coverage')
-
-    # produce tables for coverage and VCF merging
-    final_analysis_table["s_2"] = final_analysis_table["s"]
-    table_cov = final_analysis_table[["s", "coverage", "s_2"]].rename({'s':'collaborator_participant_id', 'coverage':'base_coverage'}).rename({'s_2':'s'})
-    table_cov['coverage'] = 'file:///' + table_cov['coverage']
-    table_vcf = final_analysis_table.rename({'s_2':'entity:participant_id'})
-    table_vcf['vcf'] = 'file:///' + table_vcf['vcf']
+    final_stats_table = stats_table.merge(qc_table, how='outer', on='s'
+                                  ).merge(yield_table, how='inner', on='s'
+                                  ).merge(idxstats_summary, how='inner', on='s')
+    final_stats_table = compute_nuc_coverage(final_stats_table, 'nuc_mean_coverage')
 
     # output
-    table_cov.to_csv(coverage_calling_output, sep='\t', index=False)
-    table_vcf.to_csv(vcf_merging_output, sep='\t', index=False)
+    downloaded_files.to_csv(file_paths_table_output, sep='\t', index=False)
+    final_stats_table.to_csv(per_sample_stats_output, sep='\t', index=False)
 
     # output to sql
-    ht_cov = hl.Table.from_pandas(table_cov)
-    ht_cov.export(f'dnax://{my_database}/{coverage_calling_output}')
-    ht_vcf = hl.Table.from_pandas(table_vcf)
-    ht_vcf.export(f'dnax://{my_database}/{vcf_merging_output}')
+    ht_files = hl.Table.from_pandas(downloaded_files)
+    ht_files.export(f'dnax://{my_database}/{file_paths_table_output}')
+    ht_stats = hl.Table.from_pandas(final_stats_table)
+    ht_stats.export(f'dnax://{my_database}/{per_sample_stats_output}')
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--pipeline-output-folder', type=str, required=True, 
                     help="Folder containing folders, each of which should contain pipeline outputs. Do not include project name. Should contain VCF, coverage, and diagnostic files. Can be a comma-delimited list.")
-parser.add_argument('--vcf-merging-output', type=str, required=True, 
-                    help="Local path to tsv to output which will contain all fields and will be usable for VCF merging.")
-parser.add_argument('--coverage-calling-output', type=str, required=True, 
-                    help="Local path to tsv to output which will contain 3 fields pointing to mtDNA per-base coverage for merging.")
+parser.add_argument('--file-paths-table-output', type=str, required=True, 
+                    help="Local path to tsv to output which will contain all paths for coverages and vcfs.")
+parser.add_argument('--per-sample-stats-output', type=str, required=True, 
+                    help="Local path to tsv to output which contains all per-sample data.")
 parser.add_argument('--dx-init', type=str, required=True,
                     help='SQL database path for use in DNAnexus.')
 
@@ -398,7 +393,7 @@ parser.add_argument('--qc-suffix', type=str, default='.qaqc_metrics',
 parser.add_argument('--avoid-filtering-idxstats-chr', action='store_true',
                     help='If enabled, this flag will prevent filtering to autosomes when producing nucDNA coverage estimates.')
 
-pipeline_output_folder = '220618_MitochondriaPipelineSwirl/v2.5_Multi_first50/'
+pipeline_output_folder = '220618_MitochondriaPipelineSwirl/v2.5_Multi_first50/,220618_MitochondriaPipelineSwirl/20k/'
 vcf_suffix = 'batch_merged_mt_calls.vcf.bgz'
 coverage_suffix = 'batch_merged_mt_coverage.tsv.bgz'
 mtstats_suffix = 'batch_analysis_statistics.tsv'
@@ -406,8 +401,8 @@ yield_suffix = 'batch_yield_metrics.tsv.gz'
 idxstats_suffix = 'batch_idxstats_metrics.tsv.gz'
 qc_stats_folder = '/Bulk/Whole genome sequences/Concatenated QC Metrics/'
 qc_suffix = '.qaqc_metrics'
-vcf_merging_output = 'tab_vcf_merging.tsv'
-coverage_calling_output = 'tab_coverage.tsv'
+file_paths_table_output = 'tab_batch_file_paths.tsv'
+per_sample_stats_output = 'tab_per_sample_stats.tsv'
 dx_init = '220619_MitochondriaPipelineSwirl_v2_5_Multi_20k_test'
 avoid_filtering_idxstats_chr = False
 
