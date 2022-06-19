@@ -259,8 +259,11 @@ def import_and_cat_tables(directory_df, id_col, path_col, new_id_col, append_ids
 
 
 def fuse_find_data_objects(folder, suffix, recursive=True):
-    path_search = FUSE_PREFIX + folder + '**/*' + suffix
-    identified_objects = glob.glob(path_search, recursive=recursive)
+    folders = pipeline_output_folder.split(',')
+    identified_objects = []
+    for folder in folders:
+        path_search = FUSE_PREFIX + folder + '**/*' + suffix
+        identified_objects+=glob.glob(path_search, recursive=recursive)
     return identified_objects
 
 
@@ -309,6 +312,13 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
                  'stats': fuse_find_data_objects(pipeline_output_folder, mtstats_suffix, True),
                  'yield': fuse_find_data_objects(pipeline_output_folder, yield_suffix, True),
                  'idxstats': fuse_find_data_objects(pipeline_output_folder, idxstats_suffix, True)}
+    
+    # checks on dict
+    batches = [[os.path.basename(os.path.dirname(x)) for x in v] for k,v in data_dict.items()]
+    if not all([len(set(x)) == len(x) for x in batches]):
+        raise ValueError('ERROR: there are duplicate batches (or multiple files per batch).')
+    
+    # obtain paths
     downloaded_files = produce_fuse_file_table(data_dict, {'vcf':vcf_suffix, 'coverage':coverage_suffix, 'stats':mtstats_suffix, 'yield':yield_suffix, 'idxstats':idxstats_suffix})
 
     # checks on downloaded data
