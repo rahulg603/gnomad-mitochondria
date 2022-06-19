@@ -102,6 +102,7 @@ def main(args):  # noqa: D103
     sc = pyspark.SparkContext()
     spark = pyspark.sql.SparkSession(sc)
     hl.init(sc=sc, tmp_dir=temp_dir)
+    hl._set_flags(no_whole_stage_codegen='1')
 
     if args.overwrite == False and hl.hadoop_exists(output_ht):
         logger.warning(
@@ -116,26 +117,43 @@ def main(args):  # noqa: D103
     logger.info(
         "Reading in individual coverage files as matrix tables and adding to a list of matrix tables..."
     )
+    idx = 0
     with hl.hadoop_open(input_tsv, "r") as f:
         next(f)
         for line in f:
+            idx+=1
             line = line.rstrip()
             items = line.split("\t")
             participant_id, base_level_coverage_metrics, sample = items[0:3]
-            mt = hl.import_matrix_table(
+            # mt = hl.import_matrix_table(
+            #     base_level_coverage_metrics,
+            #     delimiter="\t",
+            #     row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
+            #     row_key=["chrom", "pos"],
+            #     min_partitions=args.n_read_partitions,
+            # )
+            # if not keep_targets:
+            #     mt = mt.drop("target")
+            # else:
+            #     mt = mt.key_rows_by(*["chrom", "pos", "target"])
+            # mt = mt.rename({"x": "coverage"})
+            # mt = mt.key_cols_by(s=sample)
+
+            mt = hl.import_table(
                 base_level_coverage_metrics,
-                delimiter="\t",
-                row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
-                row_key=["chrom", "pos"],
-                min_partitions=args.n_read_partitions,
-            )
+                delimiter='\t',
+                types={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr, "coverage": hl.tint}
+            ).annotate(s=sample
+            ).to_matrix_table(row_key=['chrom','pos'], col_key=['s'], row_fields=['target'], 
+                            n_partitions=args.n_read_partitions)
             if not keep_targets:
                 mt = mt.drop("target")
             else:
                 mt = mt.key_rows_by(*["chrom", "pos", "target"])
-            mt = mt.rename({"x": "coverage"})
-            mt = mt.key_cols_by(s=sample)
+
             mt_list.append(mt)
+            if idx % 500 == 0:
+                logger.info(f"Imported sample {str(idx)}...")
 
     logger.info("Joining individual coverage mts...")
     out_dir = dirname(output_ht)

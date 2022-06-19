@@ -129,8 +129,8 @@ def main(args):  # noqa: D103
             #     mt = mt.drop("target")
             # else:
             #     mt = mt.key_rows_by(*["chrom", "pos", "target"])
-            #     mt = mt.rename({"x": "coverage"})
-            #     mt = mt.key_cols_by(s=sample)
+            # mt = mt.rename({"x": "coverage"})
+            # mt = mt.key_cols_by(s=sample)
 
 
             mt = hl.import_table(
