@@ -6,6 +6,7 @@ import re
 import sys
 
 import hail as hl
+hl._set_flags(no_whole_stage_codegen='1')
 
 from os.path import dirname
 from gnomad.utils.slack import slack_notifications
@@ -46,7 +47,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partition
 
             # Multiway zip join will produce an __entries annotation, which is an array where each element is a struct containing the __entries annotation (array of structs) for that sample
             merged = hl.Table.multi_way_zip_join(to_merge, "__entries", "__cols")
-            if min_partitions > 10:
+            if min_partitions > 4:
                 merged = merged.checkpoint(f"stage_{stage}_job_{i}_pre.ht", overwrite=True)
             # Flatten __entries while taking into account different entry lengths at different samples/variants (samples lacking a variant will be NA)
             merged = merged.annotate(
@@ -117,19 +118,33 @@ def main(args):  # noqa: D103
             line = line.rstrip()
             items = line.split("\t")
             participant_id, base_level_coverage_metrics, sample = items[0:3]
-            mt = hl.import_matrix_table(
+            # mt = hl.import_matrix_table(
+            #     base_level_coverage_metrics,
+            #     delimiter="\t",
+            #     row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
+            #     row_key=["chrom", "pos"],
+            #     min_partitions=1,
+            # )
+            # if not keep_targets:
+            #     mt = mt.drop("target")
+            # else:
+            #     mt = mt.key_rows_by(*["chrom", "pos", "target"])
+            #     mt = mt.rename({"x": "coverage"})
+            #     mt = mt.key_cols_by(s=sample)
+
+
+            mt = hl.import_table(
                 base_level_coverage_metrics,
-                delimiter="\t",
-                row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
-                row_key=["chrom", "pos"],
-                min_partitions=args.n_read_partitions,
-            )
+                delimiter='\t',
+                types={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr, "coverage": hl.tint}
+            ).annotate(s=sample
+            ).to_matrix_table(row_key=['chrom','pos'], col_key=['s'], row_fields=['target'], 
+                            n_partitions=args.n_read_partitions)
             if not keep_targets:
                 mt = mt.drop("target")
             else:
                 mt = mt.key_rows_by(*["chrom", "pos", "target"])
-            mt = mt.rename({"x": "coverage"})
-            mt = mt.key_cols_by(s=sample)
+
             mt_list.append(mt)
             if idx % 500 == 0:
                 logger.info(f"Imported sample {str(idx)}...")

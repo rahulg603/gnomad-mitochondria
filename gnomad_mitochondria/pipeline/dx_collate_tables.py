@@ -1,4 +1,5 @@
 import hail as hl
+hl._set_flags(no_whole_stage_codegen='1')
 import pandas as pd
 import argparse
 import dxpy
@@ -278,7 +279,7 @@ def run_describe(lst):
     return [y for x in split_lists for y in dxpy.describe(x)]
 
 
-def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, qc_stats_folder, qc_suffix,
+def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yield_suffix, idxstats_suffix, qc_stats_folder, qc_suffix,
          vcf_merging_output, coverage_calling_output, dx_init):
 
     # start SQL session
@@ -290,8 +291,10 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, qc
     # download mito pipeline data
     data_dict = {'vcf': fuse_find_data_objects(pipeline_output_folder, vcf_suffix, False), 
                  'coverage': fuse_find_data_objects(pipeline_output_folder, coverage_suffix, False),
-                 'stats': fuse_find_data_objects(pipeline_output_folder, mtstats_suffix, False)}
-    downloaded_files = produce_fuse_file_table(data_dict, {'vcf':vcf_suffix, 'coverage':coverage_suffix, 'stats':mtstats_suffix})
+                 'stats': fuse_find_data_objects(pipeline_output_folder, mtstats_suffix, False),
+                 'yield': fuse_find_data_objects(pipeline_output_folder, yield_suffix, False),
+                 'idxstats': fuse_find_data_objects(pipeline_output_folder, idxstats_suffix, False)}
+    downloaded_files = produce_fuse_file_table(data_dict, {'vcf':vcf_suffix, 'coverage':coverage_suffix, 'stats':mtstats_suffix, 'yield':yield_suffix, 'idxstats':idxstats_suffix})
 
     # read qc metrics
     data_dict_qc = {'qc': fuse_find_data_objects(qc_stats_folder, qc_suffix, False)}
@@ -299,6 +302,8 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, qc
 
     # import stats and qc and merge all into table
     stats_table = import_and_cat_tables(downloaded_files, 's', 'stats', 's', enforce_nonmiss=True)
+    yield_table = import_and_cat_tables(downloaded_files, 's', 'yield', 's', enforce_nonmiss=True)
+    idxstats_table = import_and_cat_tables(downloaded_files, 's', 'idxstats', 's', enforce_nonmiss=True)
     qc_table = import_and_cat_tables(downloaded_qc_files, 's', 'qc', 's', append_ids_and_t=True, filter_by=list(stats_table['s']))
     final_analysis_table = stats_table.merge(qc_table, how='outer', on='s').merge(downloaded_files, how='inner', on='s')
 
@@ -330,21 +335,27 @@ parser.add_argument('--coverage-calling-output', type=str, required=True,
 parser.add_argument('--dx-init', type=str, required=True,
                     help='SQL database path for use in DNAnexus.')
 
-parser.add_argument('--vcf-suffix', type=str, default='.self.ref.final.split.selfToRef.final.vcf',
-                    help="Suffix of each final VCF to import.")
-parser.add_argument('--coverage-suffix', type=str, default='_per_base_coverage.appended.liftedOver.tsv',
-                    help="Suffix of each coverage tsv to import.")
-parser.add_argument('--mtstats-suffix', type=str, default='_mtanalysis_diagnostic_statistics.tsv',
-                    help="Suffix of each mtPipeline statistics file to import.")
+parser.add_argument('--vcf-suffix', type=str, default='batch_merged_mt_calls.vcf.bgz',
+                    help="Suffix of each final VCF to import. Expects this to be multi-sample.")
+parser.add_argument('--coverage-suffix', type=str, default='batch_merged_mt_coverage.tsv.gz',
+                    help="Suffix of each coverage tsv to import. Expects multi-sample tables.")
+parser.add_argument('--mtstats-suffix', type=str, default='batch_analysis_statistics.tsv',
+                    help="Suffix of each mtPipeline statistics file to import. Expects multi-sample analysis.")
+parser.add_argument('--yield-suffix', type=str, default='batch_yield_metrics.tsv.gz',
+                    help="Suffix of each coverage tsv to import. Expects multi-sample analysis.")
+parser.add_argument('--idxstats-suffix', type=str, default='batch_idxstats_metrics.tsv.gz',
+                    help="Suffix of each mtPipeline statistics file to import. Expects multi-sample analysis.")
 parser.add_argument('--qc-stats-folder', type=str, default='/Bulk/Whole genome sequences/Concatenated QC Metrics/',
                     help="Folder containing folders, each of which should contain QC data from WGS. Also supports a single folder with relevant files in it. Do not include project name.")
 parser.add_argument('--qc-suffix', type=str, default='.qaqc_metrics',
                     help="Suffix of each WGS QC file to import. Assumes that this file contains multiple rows for a single sample.")
 
 pipeline_output_folder = '220403_mitopipeline_v2_2_ukb_trial/'
-vcf_suffix = '.self.ref.final.split.selfToRef.final.vcf'
-coverage_suffix = '_per_base_coverage.appended.liftedOver.tsv'
-mtstats_suffix = '_mtanalysis_diagnostic_statistics.tsv'
+vcf_suffix = 'batch_merged_mt_calls.vcf.bgz'
+coverage_suffix = 'batch_merged_mt_coverage.tsv.gz'
+mtstats_suffix = 'batch_analysis_statistics.tsv'
+yield_suffix = 'batch_yield_metrics.tsv.gz'
+idxstats_suffix = 'batch_idxstats_metrics.tsv.gz'
 qc_stats_folder = '/Bulk/Whole genome sequences/Concatenated QC Metrics/'
 qc_suffix = '.qaqc_metrics'
 vcf_merging_output = 'tab_vcf_merging.tsv'

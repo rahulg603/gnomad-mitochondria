@@ -4,6 +4,7 @@ import math
 import os
 
 import hail as hl
+hl._set_flags(no_whole_stage_codegen='1')
 from hail.utils.java import info
 from typing import Dict
 

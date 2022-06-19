@@ -12,16 +12,16 @@ mv gnomad-mitochondria gnomad_mitochondria_hold
 mv gnomad_mitochondria_hold/gnomad_mitochondria ./
 cd gnomad_mitochondria/pipeline/
 
-python dx_provision_sql.py --dx-init 220507_mitopipeline_v2_2_ukb_trial
+python dx_provision_sql.py --dx-init 220619_MitochondriaPipelineSwirl_v2_5_Multi_20k
 
 python dx_collate_tables.py \
 --pipeline-output-folder '220507_mitopipeline_v2_2_ukb_trial/' \
 --vcf-merging-output 'tab_vcf_merging.tsv' \
 --coverage-calling-output 'tab_coverage.tsv' \
---dx-init 220507_mitopipeline_v2_2_ukb_trial
+--dx-init 220619_MitochondriaPipelineSwirl_v2_5_Multi_20k
 
-dx upload tab_vcf_merging.tsv --path /220507_mitopipeline_v2_2_ukb_trial/merging/tab_vcf_merging.tsv
-dx upload tab_coverage.tsv --path /220507_mitopipeline_v2_2_ukb_trial/merging/tab_coverage.tsv
+dx upload tab_vcf_merging.tsv --path /220619_MitochondriaPipelineSwirl_v2_5_Multi_20k/merging/tab_vcf_merging.tsv
+dx upload tab_coverage.tsv --path /220619_MitochondriaPipelineSwirl_v2_5_Multi_20k/merging/tab_coverage.tsv
 
 python dx_annotate_coverage.py \
 -i "tab_coverage.tsv" \
