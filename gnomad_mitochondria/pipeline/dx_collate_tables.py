@@ -1,5 +1,4 @@
 import hail as hl
-hl._set_flags(no_whole_stage_codegen='1')
 import pandas as pd
 import argparse
 import dxpy
@@ -12,9 +11,10 @@ import collections
 from dxpy.utils import file_load_utils
 from dxpy.bindings.download_all_inputs import _parallel_file_download, _get_num_parallel_threads, _create_dirs, \
                                               _sequential_file_download
-from functools import reduce
+from functools import reduce, partial
 
 FUSE_PREFIX = '/mnt/project/'
+AUTOSOMES = ['chr' + str(x) for x in range(1, 23)]
 
 
 def make_input_json(d, fl_out="sample.json"):
@@ -31,14 +31,25 @@ def make_keyed_df(key, lst, key_to_suffix):
     return df
 
 
+def make_keyed_df_multi(key, lst, key_to_suffix):
+    df = pd.DataFrame({key: lst})
+    df['batch'] = df[key].apply(lambda x: os.path.basename(os.path.dirname(x)))
+    df['batch'] = df['batch'].str.replace(key_to_suffix[key]+'$',"")
+    return df
+
+
 def reader1(args):
     idx, f = args
     df = pd.read_csv(f, index_col=0, header=None, sep='\t').transpose().assign(newcolthis=idx)
     return df
 
 
-def reader2(f):
-    return pd.read_csv(f, index_col=None, header=0, sep='\t')
+def reader2(args, filter_to=None):
+    idx, f = args
+    tab = pd.read_csv(f, index_col=None, header=0, sep='\t').assign(newcolthis=idx)
+    if filter_to is not None:
+        tab = tab[tab['chr'].isin(filter_to)]
+    return tab
 
 
 def custom_get_job_input_filenames(input_dict):
@@ -217,7 +228,7 @@ def custom_download_all_inputs(input_links, suffix_key, exclude=None, parallel=F
     return joint_table
 
 
-def import_and_cat_tables(directory_df, id_col, path_col, new_id_col, append_ids_and_t=False, max_threads=8, filter_by=None, enforce_nonmiss=False):
+def import_and_cat_tables(directory_df, id_col, path_col, new_id_col, append_ids_and_t=False, max_threads=8, filter_by=None, enforce_nonmiss=False, filter_chr=None):
     ids = [x for _, x in directory_df[id_col].iteritems()]
     directories = [x for _, x in directory_df[path_col].iteritems()]
     p = multiprocessing.Pool(processes=max_threads)
@@ -227,17 +238,14 @@ def import_and_cat_tables(directory_df, id_col, path_col, new_id_col, append_ids
 
     if append_ids_and_t:
         df_from_each_file = p.map(reader1, [(idx, f) for idx, f in zip(ids, directories) if idx in to_subset_to])
-        if len(df_from_each_file) == 0:
-            concatenated_df = empty_df
-        else:
-            concatenated_df = pd.concat(df_from_each_file, ignore_index=True, axis=0)
-            concatenated_df = concatenated_df.rename({'newcolthis': new_id_col}, axis=1)
+    else:        
+        df_from_each_file = p.map(partial(reader2, filter_to=filter_chr), [(idx, f) for idx, f in zip(ids, directories) if idx in to_subset_to])
+    
+    if len(df_from_each_file) == 0:
+        concatenated_df = empty_df
     else:
-        df_from_each_file = p.map(reader2, [f for idx, f in zip(ids, directories) if idx in to_subset_to])
-        if len(df_from_each_file) == 0:
-            concatenated_df = empty_df
-        else:
-            concatenated_df = pd.concat(df_from_each_file, ignore_index=True, axis=0)
+        concatenated_df = pd.concat(df_from_each_file, ignore_index=True, axis=0)
+        concatenated_df = concatenated_df.rename({'newcolthis': new_id_col}, axis=1)
 
     # ensure that all ids are found in the new df
     if enforce_nonmiss:
@@ -256,10 +264,11 @@ def fuse_find_data_objects(folder, suffix, recursive=True):
     return identified_objects
 
 
-def produce_fuse_file_table(input_links, suffix_key, enforce_nonmissing=True):
+def produce_fuse_file_table(input_links, suffix_key, enforce_nonmissing=True, single_sample=False):
     # output a pandas table with columns for all downloaded samples with sample IDs
-    trimmed_inputs = [make_keyed_df(k, v, suffix_key) for k, v in input_links.items()]
-    joint_table = reduce(lambda x, y: pd.merge(x, y, on = 's', how='outer'), trimmed_inputs)
+    fun_use = make_keyed_df if single_sample else make_keyed_df_multi
+    trimmed_inputs = [fun_use(k, v, suffix_key) for k, v in input_links.items()]
+    joint_table = reduce(lambda x, y: pd.merge(x, y, on = 'batch', how='outer'), trimmed_inputs)
     if enforce_nonmissing:
         # verify that all tables are non-missing
         tf_null = joint_table.isnull().any().any()
@@ -279,33 +288,59 @@ def run_describe(lst):
     return [y for x in split_lists for y in dxpy.describe(x)]
 
 
+def compute_nuc_coverage(df, column_name):
+    df[column_name] = ((df.total_mapped_reads - df.singletons - df.mate_diff_chr - df.duplicates) * df.READ_LENGTH ) / df.genome_length
+    return df
+
+
 def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yield_suffix, idxstats_suffix, qc_stats_folder, qc_suffix,
-         vcf_merging_output, coverage_calling_output, dx_init):
+         vcf_merging_output, coverage_calling_output, dx_init, avoid_filtering_idxstats_chr):
 
     # start SQL session
-    my_database = dxpy.find_one_data_object(name=dx_init)["id"]
+    my_database = dxpy.find_one_data_object(name=dx_init.lower())["id"]
     sc = pyspark.SparkContext()
     spark = pyspark.sql.SparkSession(sc)
     hl.init(sc=sc, tmp_dir=f'dnax://{my_database}/tmp/')
+    hl._set_flags(no_whole_stage_codegen='1')
 
     # download mito pipeline data
-    data_dict = {'vcf': fuse_find_data_objects(pipeline_output_folder, vcf_suffix, False), 
-                 'coverage': fuse_find_data_objects(pipeline_output_folder, coverage_suffix, False),
-                 'stats': fuse_find_data_objects(pipeline_output_folder, mtstats_suffix, False),
-                 'yield': fuse_find_data_objects(pipeline_output_folder, yield_suffix, False),
-                 'idxstats': fuse_find_data_objects(pipeline_output_folder, idxstats_suffix, False)}
+    data_dict = {'vcf': fuse_find_data_objects(pipeline_output_folder, vcf_suffix, True), 
+                 'coverage': fuse_find_data_objects(pipeline_output_folder, coverage_suffix, True),
+                 'stats': fuse_find_data_objects(pipeline_output_folder, mtstats_suffix, True),
+                 'yield': fuse_find_data_objects(pipeline_output_folder, yield_suffix, True),
+                 'idxstats': fuse_find_data_objects(pipeline_output_folder, idxstats_suffix, True)}
     downloaded_files = produce_fuse_file_table(data_dict, {'vcf':vcf_suffix, 'coverage':coverage_suffix, 'stats':mtstats_suffix, 'yield':yield_suffix, 'idxstats':idxstats_suffix})
+
+    # checks on downloaded data
+    per_row_un = downloaded_files.apply(lambda x: x.apply(lambda y: os.path.basename(os.path.dirname(y))).unique(), 1)
+    per_row_un = per_row_un.apply(lambda x: [item for item in x if len(item) != 0])
+    if not all(per_row_un.apply(len) == 1):
+        raise ValueError('ERROR: all imported files must be ordered in the same way.')
+    if not all(downloaded_files['batch'] == per_row_un.map(lambda x: x[0])):
+        raise ValueError('ERROR: all imported files must have the same batch order as the specified batch name.')
 
     # read qc metrics
     data_dict_qc = {'qc': fuse_find_data_objects(qc_stats_folder, qc_suffix, False)}
-    downloaded_qc_files = produce_fuse_file_table(data_dict_qc, {'qc':qc_suffix})
+    downloaded_qc_files = produce_fuse_file_table(data_dict_qc, {'qc':qc_suffix}, single_sample=True)
 
     # import stats and qc and merge all into table
-    stats_table = import_and_cat_tables(downloaded_files, 's', 'stats', 's', enforce_nonmiss=True)
-    yield_table = import_and_cat_tables(downloaded_files, 's', 'yield', 's', enforce_nonmiss=True)
-    idxstats_table = import_and_cat_tables(downloaded_files, 's', 'idxstats', 's', enforce_nonmiss=True)
+    stats_table = import_and_cat_tables(downloaded_files, 'batch', 'stats', 'batch', enforce_nonmiss=False)
+    yield_table = import_and_cat_tables(downloaded_files, 'batch', 'yield', 'batch', enforce_nonmiss=False)
+    idxstats_table = import_and_cat_tables(downloaded_files, 'batch', 'idxstats', 'batch', enforce_nonmiss=False, filter_chr=AUTOSOMES)
+
+    # produce munged idxstats table
+    idxstats_summary = idxstats_table.groupby(idxstats_table['s']).agg(
+        total_mapped_reads=pd.NamedAgg(column='mapped_reads', aggfunc='sum'),
+        total_unmapped_reads=pd.NamedAgg(column='unmapped_reads', aggfunc='sum'),
+        genome_length=pd.NamedAgg(column='len', aggfunc='sum')
+    )
+
     qc_table = import_and_cat_tables(downloaded_qc_files, 's', 'qc', 's', append_ids_and_t=True, filter_by=list(stats_table['s']))
-    final_analysis_table = stats_table.merge(qc_table, how='outer', on='s').merge(downloaded_files, how='inner', on='s')
+    final_analysis_table = stats_table.merge(qc_table, how='outer', on='s'
+                                     ).merge(downloaded_files, how='inner', on='batch'
+                                     ).merge(yield_table, how='inner', on='s'
+                                     ).merge(idxstats_summary, how='inner', on='s')
+    final_analysis_table = compute_nuc_coverage(final_analysis_table, 'nuc_mean_coverage')
 
     # produce tables for coverage and VCF merging
     final_analysis_table["s_2"] = final_analysis_table["s"]
@@ -327,7 +362,7 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--pipeline-output-folder', type=str, required=True, 
-                    help="Folder containing folders, each of which should contain pipeline outputs. Do not include project name. Should contain VCF, coverage, and diagnostic files.")
+                    help="Folder containing folders, each of which should contain pipeline outputs. Do not include project name. Should contain VCF, coverage, and diagnostic files. Can be a comma-delimited list.")
 parser.add_argument('--vcf-merging-output', type=str, required=True, 
                     help="Local path to tsv to output which will contain all fields and will be usable for VCF merging.")
 parser.add_argument('--coverage-calling-output', type=str, required=True, 
@@ -337,7 +372,7 @@ parser.add_argument('--dx-init', type=str, required=True,
 
 parser.add_argument('--vcf-suffix', type=str, default='batch_merged_mt_calls.vcf.bgz',
                     help="Suffix of each final VCF to import. Expects this to be multi-sample.")
-parser.add_argument('--coverage-suffix', type=str, default='batch_merged_mt_coverage.tsv.gz',
+parser.add_argument('--coverage-suffix', type=str, default='batch_merged_mt_coverage.tsv.bgz',
                     help="Suffix of each coverage tsv to import. Expects multi-sample tables.")
 parser.add_argument('--mtstats-suffix', type=str, default='batch_analysis_statistics.tsv',
                     help="Suffix of each mtPipeline statistics file to import. Expects multi-sample analysis.")
@@ -350,9 +385,12 @@ parser.add_argument('--qc-stats-folder', type=str, default='/Bulk/Whole genome s
 parser.add_argument('--qc-suffix', type=str, default='.qaqc_metrics',
                     help="Suffix of each WGS QC file to import. Assumes that this file contains multiple rows for a single sample.")
 
-pipeline_output_folder = '220403_mitopipeline_v2_2_ukb_trial/'
+parser.add_argument('--avoid-filtering-idxstats-chr', action='store_true',
+                    help='If enabled, this flag will prevent filtering to autosomes when producing nucDNA coverage estimates.')
+
+pipeline_output_folder = '220618_MitochondriaPipelineSwirl/v2.5_Multi_first50/'
 vcf_suffix = 'batch_merged_mt_calls.vcf.bgz'
-coverage_suffix = 'batch_merged_mt_coverage.tsv.gz'
+coverage_suffix = 'batch_merged_mt_coverage.tsv.bgz'
 mtstats_suffix = 'batch_analysis_statistics.tsv'
 yield_suffix = 'batch_yield_metrics.tsv.gz'
 idxstats_suffix = 'batch_idxstats_metrics.tsv.gz'
@@ -360,6 +398,8 @@ qc_stats_folder = '/Bulk/Whole genome sequences/Concatenated QC Metrics/'
 qc_suffix = '.qaqc_metrics'
 vcf_merging_output = 'tab_vcf_merging.tsv'
 coverage_calling_output = 'tab_coverage.tsv'
+dx_init = '220619_MitochondriaPipelineSwirl_v2_5_Multi_20k_test'
+avoid_filtering_idxstats_chr = False
 
 if __name__ == '__main__':
     args = parser.parse_args()
