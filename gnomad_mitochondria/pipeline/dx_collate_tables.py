@@ -267,6 +267,15 @@ def fuse_find_data_objects(folder, suffix, recursive=True):
     return identified_objects
 
 
+def dx_find_data_objects(folder, suffix, recursive=True):
+    folders = folder.split(',')
+    identified_objects = []
+    for this_folder in folders:
+        gen_item = dxpy.find_data_objects(classname='file', name=suffix, name_mode='glob', describe=True, folder='/'+this_folder, recurse=recursive)
+        identified_objects+=[FUSE_PREFIX + re.sub('^/', '', x['describe']['folder']) + '/' + x['describe']['name'] for x in gen_item]
+    return identified_objects
+
+
 def subset_to_data_objects(lst, suffix):
     return [x for x in lst if re.search(suffix, x)]
 
@@ -311,7 +320,8 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     hl._set_flags(no_whole_stage_codegen='1')
 
     # download mito pipeline data
-    all_batch_files = fuse_find_data_objects(pipeline_output_folder, unified_prefix + '*', True)
+    print('Finding all relevant data objects...')
+    all_batch_files = dx_find_data_objects(pipeline_output_folder, unified_prefix + '*', True)
     data_dict = {'vcf': subset_to_data_objects(all_batch_files, vcf_suffix), 
                  'coverage': subset_to_data_objects(all_batch_files, coverage_suffix),
                  'stats': subset_to_data_objects(all_batch_files, mtstats_suffix),
@@ -319,14 +329,17 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
                  'idxstats': subset_to_data_objects(all_batch_files, idxstats_suffix)}
     
     # checks on dict
+    print('Running checks...')
     batches = [[os.path.basename(os.path.dirname(x)) for x in v] for k,v in data_dict.items()]
     if not all([len(set(x)) == len(x) for x in batches]):
         raise ValueError('ERROR: there are duplicate batches (or multiple files per batch).')
     
     # obtain paths
+    print('Obtaining paths...')
     downloaded_files = produce_fuse_file_table(data_dict, {'vcf':vcf_suffix, 'coverage':coverage_suffix, 'stats':mtstats_suffix, 'yield':yield_suffix, 'idxstats':idxstats_suffix})
 
     # checks on downloaded data
+    print('Checking file paths...')
     per_row_un = downloaded_files.apply(lambda x: x.apply(lambda y: os.path.basename(os.path.dirname(y))).unique(), 1)
     per_row_un = per_row_un.apply(lambda x: [item for item in x if len(item) != 0])
     if not all(per_row_un.apply(len) == 1):
@@ -335,10 +348,12 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
         raise ValueError('ERROR: all imported files must have the same batch order as the specified batch name.')
 
     # read qc metrics
-    data_dict_qc = {'qc': fuse_find_data_objects(qc_stats_folder, qc_suffix, False)}
+    print('Downloading QC metrics...')
+    data_dict_qc = {'qc': dx_find_data_objects(qc_stats_folder, '*'+qc_suffix, True)}
     downloaded_qc_files = produce_fuse_file_table(data_dict_qc, {'qc':qc_suffix}, single_sample=True)
 
     # import stats and qc and merge all into table
+    print('Importing all statistics...')
     stats_table = import_and_cat_tables(downloaded_files, 'batch', 'stats', 'batch', enforce_nonmiss=False)
     yield_table = import_and_cat_tables(downloaded_files, 'batch', 'yield', 'batch', enforce_nonmiss=False)
     if avoid_filtering_idxstats_chr:
@@ -353,20 +368,26 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
         genome_length=pd.NamedAgg(column='len', aggfunc='sum')
     )
 
+    print('Importing all QC...')
     qc_table = import_and_cat_tables(downloaded_qc_files, 's', 'qc', 's', append_ids_and_t=True, filter_by=list(stats_table['s']))
     final_stats_table = stats_table.merge(qc_table, how='outer', on='s'
-                                  ).merge(yield_table, how='inner', on='s'
+                                  ).merge(yield_table, how='inner', on=['s','batch']
                                   ).merge(idxstats_summary, how='inner', on='s')
     final_stats_table = compute_nuc_coverage(final_stats_table, 'nuc_mean_coverage')
 
     # output
+    print('Outputting flat files...')
     downloaded_files.to_csv(re.sub('ht$', 'tsv', file_paths_table_output), sep='\t', index=False)
     final_stats_table.to_csv(re.sub('ht$', 'tsv', per_sample_stats_output), sep='\t', index=False)
 
     # output to sql
-    ht_files = hl.Table.from_pandas(downloaded_files).repartition(5)
+    print('Generating Hail tables and outputting to SQL database...')
+    ht_files = hl.Table.from_pandas(downloaded_files).repartition(5).key_by('batch')
+    #ht_files = hl.import_table('file://' + os.getcwd() + '/' + re.sub('ht$', 'tsv', file_paths_table_output), impute=True, min_partitions=5)
     ht_files.write(f'dnax://{my_database}/{file_paths_table_output}', overwrite=True)
+    
     ht_stats = hl.Table.from_pandas(final_stats_table).repartition(50).key_by('s')
+    #ht_stats = hl.import_table('file://' + os.getcwd() + '/' + re.sub('ht$', 'tsv', per_sample_stats_output), impute=True, min_partitions=50)
     ht_stats.write(f'dnax://{my_database}/{per_sample_stats_output}', overwrite=True)
 
 
@@ -391,7 +412,7 @@ parser.add_argument('--yield-suffix', type=str, default='batch_yield_metrics.tsv
                     help="Suffix of each coverage tsv to import. Expects multi-sample analysis.")
 parser.add_argument('--idxstats-suffix', type=str, default='batch_idxstats_metrics.tsv.gz',
                     help="Suffix of each mtPipeline statistics file to import. Expects multi-sample analysis.")
-parser.add_argument('--qc-stats-folder', type=str, default='/Bulk/Whole genome sequences/Concatenated QC Metrics/',
+parser.add_argument('--qc-stats-folder', type=str, default='Bulk/Whole genome sequences/Concatenated QC Metrics/',
                     help="Folder containing folders, each of which should contain QC data from WGS. Also supports a single folder with relevant files in it. Do not include project name.")
 parser.add_argument('--qc-suffix', type=str, default='.qaqc_metrics',
                     help="Suffix of each WGS QC file to import. Assumes that this file contains multiple rows for a single sample.")
@@ -399,19 +420,22 @@ parser.add_argument('--qc-suffix', type=str, default='.qaqc_metrics',
 parser.add_argument('--avoid-filtering-idxstats-chr', action='store_true',
                     help='If enabled, this flag will prevent filtering to autosomes when producing nucDNA coverage estimates.')
 
+
+# defaults for debugging
 pipeline_output_folder = '220618_MitochondriaPipelineSwirl/v2.5_Multi_first50/,220618_MitochondriaPipelineSwirl/20k/'
 vcf_suffix = 'batch_merged_mt_calls.vcf.bgz'
 coverage_suffix = 'batch_merged_mt_coverage.tsv.bgz'
 mtstats_suffix = 'batch_analysis_statistics.tsv'
 yield_suffix = 'batch_yield_metrics.tsv.gz'
 idxstats_suffix = 'batch_idxstats_metrics.tsv.gz'
-qc_stats_folder = '/Bulk/Whole genome sequences/Concatenated QC Metrics/'
+qc_stats_folder = 'Bulk/Whole genome sequences/Concatenated QC Metrics/'
 qc_suffix = '.qaqc_metrics'
 file_paths_table_output = 'tab_batch_file_paths.ht'
 per_sample_stats_output = 'tab_per_sample_stats.ht'
 dx_init = '220619_MitochondriaPipelineSwirl_v2_5_Multi_20k'
 avoid_filtering_idxstats_chr = False
 unified_prefix = 'batch_'
+
 
 if __name__ == '__main__':
     args = parser.parse_args()

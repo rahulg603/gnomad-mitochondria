@@ -10,7 +10,6 @@ import pyspark
 import hail as hl
 
 from os.path import dirname
-from gnomad.utils.slack import slack_notifications
 from hail.utils.java import info
 
 logging.basicConfig(
@@ -193,12 +192,6 @@ if __name__ == "__main__":
         required=True,
     )
     parser.add_argument(
-        "--slack-token", help="Slack token that allows integration with slack",
-    )
-    parser.add_argument(
-        "--slack-channel", help="Slack channel to post results and notifications to",
-    )
-    parser.add_argument(
         "--chunk-size",
         help="Chunk size to use for combining VCFs (the number of individual VCFs that should be combined at a time)",
         type=int,
@@ -221,10 +214,4 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-
-    # Both a slack token and slack channel must be supplied to receive notifications on slack
-    if args.slack_channel and args.slack_token:
-        with slack_notifications(args.slack_token, args.slack_channel):
-            main(args)
-    else:
-        main(args)
+    main(args)
