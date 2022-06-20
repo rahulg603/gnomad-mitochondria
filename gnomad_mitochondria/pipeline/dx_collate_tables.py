@@ -267,6 +267,10 @@ def fuse_find_data_objects(folder, suffix, recursive=True):
     return identified_objects
 
 
+def subset_to_data_objects(lst, suffix):
+    return [x for x in lst if re.search(suffix, x)]
+
+
 def produce_fuse_file_table(input_links, suffix_key, enforce_nonmissing=True, single_sample=False):
     # output a pandas table with columns for all downloaded samples with sample IDs
     fun_use = make_keyed_df if single_sample else make_keyed_df_multi
@@ -297,7 +301,7 @@ def compute_nuc_coverage(df, column_name):
 
 
 def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yield_suffix, idxstats_suffix, qc_stats_folder, qc_suffix,
-         file_paths_table_output, per_sample_stats_output, dx_init, avoid_filtering_idxstats_chr):
+         file_paths_table_output, per_sample_stats_output, dx_init, avoid_filtering_idxstats_chr, unified_prefix):
 
     # start SQL session
     my_database = dxpy.find_one_data_object(name=dx_init.lower())["id"]
@@ -307,11 +311,12 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     hl._set_flags(no_whole_stage_codegen='1')
 
     # download mito pipeline data
-    data_dict = {'vcf': fuse_find_data_objects(pipeline_output_folder, vcf_suffix, True), 
-                 'coverage': fuse_find_data_objects(pipeline_output_folder, coverage_suffix, True),
-                 'stats': fuse_find_data_objects(pipeline_output_folder, mtstats_suffix, True),
-                 'yield': fuse_find_data_objects(pipeline_output_folder, yield_suffix, True),
-                 'idxstats': fuse_find_data_objects(pipeline_output_folder, idxstats_suffix, True)}
+    all_batch_files = fuse_find_data_objects(pipeline_output_folder, unified_prefix + '*', True)
+    data_dict = {'vcf': subset_to_data_objects(all_batch_files, vcf_suffix), 
+                 'coverage': subset_to_data_objects(all_batch_files, coverage_suffix),
+                 'stats': subset_to_data_objects(all_batch_files, mtstats_suffix),
+                 'yield': subset_to_data_objects(all_batch_files, yield_suffix),
+                 'idxstats': subset_to_data_objects(all_batch_files, idxstats_suffix)}
     
     # checks on dict
     batches = [[os.path.basename(os.path.dirname(x)) for x in v] for k,v in data_dict.items()]
@@ -375,6 +380,7 @@ parser.add_argument('--per-sample-stats-output', type=str, required=True,
 parser.add_argument('--dx-init', type=str, required=True,
                     help='SQL database path for use in DNAnexus.')
 
+parser.add_argument('--unified-prefix', type=str, default='batch_', help='Prefix for all other files.')
 parser.add_argument('--vcf-suffix', type=str, default='batch_merged_mt_calls.vcf.bgz',
                     help="Suffix of each final VCF to import. Expects this to be multi-sample.")
 parser.add_argument('--coverage-suffix', type=str, default='batch_merged_mt_coverage.tsv.bgz',
@@ -405,6 +411,7 @@ file_paths_table_output = 'tab_batch_file_paths.ht'
 per_sample_stats_output = 'tab_per_sample_stats.ht'
 dx_init = '220619_MitochondriaPipelineSwirl_v2_5_Multi_20k'
 avoid_filtering_idxstats_chr = False
+unified_prefix = 'batch_'
 
 if __name__ == '__main__':
     args = parser.parse_args()
