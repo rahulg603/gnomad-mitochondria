@@ -52,14 +52,14 @@ def collect_vcf_paths(
         - 's': sample name
         - path to the Mutect2 VCF output, where name of this column is supplied to the `vcf_col_name` parameter
 
-    :param participant_data: Participant data (the downloaded data tab from Terra)
+    :param participant_data: Participant data (a ht)
     :param vcf_col_name: Name of column that contains VCF output
     :param participants_to_subset: Path to file of participant_ids to which the data should be subset
     :return: Dictionary with sample name as key and path to VCF as value
     """
     vcf_paths = {}
-    # Load in data from Terra
-    participant_ht = hl.import_table(participant_data)
+    # Load in data
+    participant_ht = hl.read_table(participant_data)
 
     # Remove participants that don't have VCF output
     participant_ht.filter(participant_ht[vcf_col_name] != "")
