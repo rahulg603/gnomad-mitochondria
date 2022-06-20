@@ -75,11 +75,11 @@ def collect_vcf_paths(
             )
         )
 
-    # Add the vcf path to a dictionary with sample name as key
+    # Add the vcf path to a dictionary with batch name as key
     df = participant_ht.to_pandas()
 
     for _, row in df.iterrows():
-        vcf_paths[row["s"]] = row[vcf_col_name]
+        vcf_paths[row["batch"]] = row[vcf_col_name]
 
     return vcf_paths
 
@@ -164,12 +164,12 @@ def join_mitochondria_vcfs_into_mt(
     :return: Joined MatrixTable of samples given in vcf_paths dictionary
     """
     mt_list = []
-    for sample, vcf_path in vcf_paths.items():
+    for batch, vcf_path in vcf_paths.items():
         try:
             mt = hl.import_vcf(vcf_path, reference_genome="GRCh38")
         except Exception as e:
             raise ValueError(
-                f"vcf path {vcf_path} does not exist for sample {sample}"
+                f"vcf path {vcf_path} does not exist for sample {batch}"
             ) from e
 
         # Because the vcfs are split, there is only one AF value, although misinterpreted as an array because Number=A in VCF header
@@ -199,7 +199,7 @@ def join_mitochondria_vcfs_into_mt(
             locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),
             alleles=mt.alleles,
         )
-        mt = mt.key_cols_by(s=sample)
+        mt = mt.key_cols_by(batch=batch)
         mt = mt.select_rows()
         mt_list.append(mt)
 
