@@ -5,7 +5,7 @@ import dxpy
 import pyspark
 import psutil, multiprocessing
 import json
-import sys, os, glob
+import sys, os, glob, re
 import collections
 
 from dxpy.utils import file_load_utils
@@ -303,7 +303,7 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     my_database = dxpy.find_one_data_object(name=dx_init.lower())["id"]
     sc = pyspark.SparkContext()
     spark = pyspark.sql.SparkSession(sc)
-    hl.init(sc=sc, tmp_dir=f'dnax://{my_database}/tmp/')
+    hl.init(sc=sc, tmp_dir=f'dnax://{my_database}/tmp2/')
     hl._set_flags(no_whole_stage_codegen='1')
 
     # download mito pipeline data
@@ -355,23 +355,23 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     final_stats_table = compute_nuc_coverage(final_stats_table, 'nuc_mean_coverage')
 
     # output
-    downloaded_files.to_csv(file_paths_table_output, sep='\t', index=False)
-    final_stats_table.to_csv(per_sample_stats_output, sep='\t', index=False)
+    downloaded_files.to_csv(re.sub('ht$', 'tsv', file_paths_table_output), sep='\t', index=False)
+    final_stats_table.to_csv(re.sub('ht$', 'tsv', per_sample_stats_output), sep='\t', index=False)
 
     # output to sql
-    ht_files = hl.Table.from_pandas(downloaded_files)
-    ht_files.export(f'dnax://{my_database}/{file_paths_table_output}')
-    ht_stats = hl.Table.from_pandas(final_stats_table)
-    ht_stats.export(f'dnax://{my_database}/{per_sample_stats_output}')
+    ht_files = hl.Table.from_pandas(downloaded_files).repartition(5)
+    ht_files.write(f'dnax://{my_database}/{file_paths_table_output}', overwrite=True)
+    ht_stats = hl.Table.from_pandas(final_stats_table).repartition(50)
+    ht_stats.write(f'dnax://{my_database}/{per_sample_stats_output}', overwrite=True)
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--pipeline-output-folder', type=str, required=True, 
                     help="Folder containing folders, each of which should contain pipeline outputs. Do not include project name. Should contain VCF, coverage, and diagnostic files. Can be a comma-delimited list.")
 parser.add_argument('--file-paths-table-output', type=str, required=True, 
-                    help="Local path to tsv to output which will contain all paths for coverages and vcfs.")
+                    help="Local path to ht to output which will contain all paths for coverages and vcfs.")
 parser.add_argument('--per-sample-stats-output', type=str, required=True, 
-                    help="Local path to tsv to output which contains all per-sample data.")
+                    help="Local path to ht to output which contains all per-sample data.")
 parser.add_argument('--dx-init', type=str, required=True,
                     help='SQL database path for use in DNAnexus.')
 
@@ -401,9 +401,9 @@ yield_suffix = 'batch_yield_metrics.tsv.gz'
 idxstats_suffix = 'batch_idxstats_metrics.tsv.gz'
 qc_stats_folder = '/Bulk/Whole genome sequences/Concatenated QC Metrics/'
 qc_suffix = '.qaqc_metrics'
-file_paths_table_output = 'tab_batch_file_paths.tsv'
-per_sample_stats_output = 'tab_per_sample_stats.tsv'
-dx_init = '220619_MitochondriaPipelineSwirl_v2_5_Multi_20k_test'
+file_paths_table_output = 'tab_batch_file_paths.ht'
+per_sample_stats_output = 'tab_per_sample_stats.ht'
+dx_init = '220619_MitochondriaPipelineSwirl_v2_5_Multi_20k'
 avoid_filtering_idxstats_chr = False
 
 if __name__ == '__main__':
