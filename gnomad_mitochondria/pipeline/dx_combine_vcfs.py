@@ -354,7 +354,7 @@ def apply_mito_artifact_filter(
 
 def main(args):  # noqa: D103
     # start SQL session and initialize constants
-    my_database = dxpy.find_one_data_object(name=args.dx_init)["id"]
+    my_database = dxpy.find_one_data_object(name=args.dx_init.lower())["id"]
     participant_data = f'dnax://{my_database}/{args.input_ht}'
     stats_info = f'dnax://{my_database}/{args.stats}'
     coverage_mt_path = f'dnax://{my_database}/{args.coverage_mt_path}/'
