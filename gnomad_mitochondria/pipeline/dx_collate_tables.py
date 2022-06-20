@@ -361,7 +361,7 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     # output to sql
     ht_files = hl.Table.from_pandas(downloaded_files).repartition(5)
     ht_files.write(f'dnax://{my_database}/{file_paths_table_output}', overwrite=True)
-    ht_stats = hl.Table.from_pandas(final_stats_table).repartition(50)
+    ht_stats = hl.Table.from_pandas(final_stats_table).repartition(50).key_by('s')
     ht_stats.write(f'dnax://{my_database}/{per_sample_stats_output}', overwrite=True)
 
 

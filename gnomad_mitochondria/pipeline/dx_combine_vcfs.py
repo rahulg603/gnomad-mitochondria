@@ -355,7 +355,8 @@ def apply_mito_artifact_filter(
 def main(args):  # noqa: D103
     # start SQL session and initialize constants
     my_database = dxpy.find_one_data_object(name=args.dx_init)["id"]
-    participant_data = f'dnax://{my_database}/{args.participant_data}'
+    participant_data = f'dnax://{my_database}/{args.input_ht}'
+    stats_info = f'dnax://{my_database}/{args.stats}'
     coverage_mt_path = f'dnax://{my_database}/{args.coverage_mt_path}/'
     output_bucket = f'dnax://{my_database}/{args.output_bucket}'
     temp_dir = f'dnax://{my_database}/{args.temp_dir}/'
@@ -366,7 +367,7 @@ def main(args):  # noqa: D103
     include_extra_v2_fields = args.include_extra_v2_fields
     file_name = args.file_name
     minimum_homref_coverage = args.minimum_homref_coverage
-    vcf_col_name = args.vcf_col_name
+    vcf_col_name = 'vcf'
     sc = pyspark.SparkContext()
     spark = pyspark.sql.SparkSession(sc)
     hl.init(sc=sc, tmp_dir=temp_dir)
@@ -396,11 +397,13 @@ def main(args):  # noqa: D103
 
     logger.info("Removing select sample-level filters...")
     combined_mt = remove_genotype_filters(combined_mt)
+    per_sample_stats = hl.read_table(stats_info)
 
     logger.info("Determining homoplasmic reference sites...")
     combined_mt = determine_hom_refs(
         combined_mt, coverage_mt_path, minimum_homref_coverage
     )
+    combined_mt = combined_mt.annotate_cols(nuc_mean_coverage = per_sample_stats[combined_mt.col_key].nuc_mean_coverage)
 
     logger.info("Applying artifact_prone_site fiter...")
     combined_mt = apply_mito_artifact_filter(combined_mt, artifact_prone_sites_path, artifact_prone_sites_reference)
@@ -423,9 +426,9 @@ if __name__ == "__main__":
         description="This script combines individual mitochondria VCF files into one MatrixTable, determines homoplasmic reference sites, and applies an artifact_prone_site filter"
     )
     p.add_argument(
-        "-p",
-        "--participant-data",
-        help="Participant data (the downloaded data tab from Terra), should be a tab-delimited file with at minimum columns for 'entity:participant_id' (sample name with prohibited characters replaced with underscores), 's' (sample name), and VCF output (path to the Mutect2 VCF output, where the name of this column is supplied to the `vcf_col_name` parameter)",
+        "-i",
+        "--input-ht",
+        help="Input ht with paths to vcf file.",
         required=True,
     )
     p.add_argument(
@@ -486,12 +489,15 @@ if __name__ == "__main__":
         "--chunk-size",
         help="Chunk size to use for combining VCFs (the number of individual VCFs that should be combined at a time)",
         type=int,
-        default=100,
+        default=5,
     )
     p.add_argument("--overwrite", help="Overwrites existing files", action="store_true")
     p.add_argument("--include-extra-v2-fields", help="Loads in exåtra fields from MitochondriaPipeline v2.1, specifically AD, OriginalSelfRefAlleles, and SwappedFieldIDs. If missing will fill with missing.", action="store_true")
     p.add_argument(
         "--dx-init", type=str, required=True, help='SQL database path for use in DNAnexus.'
+    )    
+    p.add_argument(
+        "--stats", type=str, required=True, help='Path to ht containing per-sample statistics.'
     )
 
     args = p.parse_args()

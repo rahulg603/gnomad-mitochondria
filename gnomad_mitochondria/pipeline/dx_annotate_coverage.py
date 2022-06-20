@@ -121,39 +121,25 @@ def main(args):  # noqa: D103
     paths = hl.read_table(input_ht)
     pairs_for_coverage = paths.annotate(pairs = (paths.batch, paths.coverage)).pairs.collect()
     for batch, base_level_coverage_metrics in pairs_for_coverage:
-        # mt = hl.import_matrix_table(
-        #     base_level_coverage_metrics,
-        #     delimiter="\t",
-        #     row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
-        #     row_key=["chrom", "pos"],
-        #     min_partitions=args.n_read_partitions,
-        # )
-        # if not keep_targets:
-        #     mt = mt.drop("target")
-        # else:
-        #     mt = mt.key_rows_by(*["chrom", "pos", "target"])
-        # mt = mt.rename({"x": "coverage"})
-        # mt = mt.key_cols_by(s=sample)
-
-        mt = hl.import_table(
-            base_level_coverage_metrics,
-            delimiter='\t',
-            types={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr, "coverage": hl.tint}
-        ).annotate(batch=batch
-        ).to_matrix_table(row_key=['chrom','pos'], col_key=['s'], row_fields=['target'], 
-                          n_partitions=args.n_read_partitions, col_fields=['batch'])
+        mt = hl.import_matrix_table(
+            'file://' + base_level_coverage_metrics,
+            delimiter="\t",
+            row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
+            row_key=["chrom", "pos"],
+            min_partitions=args.n_read_partitions,
+        )
         if not keep_targets:
             mt = mt.drop("target")
         else:
             mt = mt.key_rows_by(*["chrom", "pos", "target"])
+        mt = mt.key_cols_by().rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
+        mt = mt.annotate_cols(batch = batch)
 
         mt_list.append(mt)
         if idx % 500 == 0:
             logger.info(f"Imported sample {str(idx)}...")
 
     logger.info("Joining individual coverage mts...")
-    out_dir = dirname(output_ht)
-
     cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions)
     n_samples = cov_mt.count_cols()
 
@@ -216,7 +202,7 @@ if __name__ == "__main__":
         "--chunk-size",
         help="Chunk size to use for combining VCFs (the number of individual VCFs that should be combined at a time)",
         type=int,
-        default=100,
+        default=5,
     )
     parser.add_argument(
         "--overwrite", help="Overwrites existing files", action="store_true"
