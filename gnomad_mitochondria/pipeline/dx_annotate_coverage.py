@@ -93,7 +93,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partition
 def main(args):  # noqa: D103
     # start SQL session and initialize constants
     my_database = dxpy.find_one_data_object(name=args.dx_init.lower())["id"]
-    input_tsv = f'dnax://{my_database}/{args.input_tsv}/'
+    input_ht = f'dnax://{my_database}/{args.input_ht}/'
     output_ht = f'dnax://{my_database}/{args.output_ht}'
     temp_dir = f'dnax://{my_database}/{args.temp_dir}/'
     chunk_size = args.chunk_size
@@ -118,42 +118,38 @@ def main(args):  # noqa: D103
         "Reading in individual coverage files as matrix tables and adding to a list of matrix tables..."
     )
     idx = 0
-    with hl.hadoop_open(input_tsv, "r") as f:
-        next(f)
-        for line in f:
-            idx+=1
-            line = line.rstrip()
-            items = line.split("\t")
-            participant_id, base_level_coverage_metrics, sample = items[0:3]
-            # mt = hl.import_matrix_table(
-            #     base_level_coverage_metrics,
-            #     delimiter="\t",
-            #     row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
-            #     row_key=["chrom", "pos"],
-            #     min_partitions=args.n_read_partitions,
-            # )
-            # if not keep_targets:
-            #     mt = mt.drop("target")
-            # else:
-            #     mt = mt.key_rows_by(*["chrom", "pos", "target"])
-            # mt = mt.rename({"x": "coverage"})
-            # mt = mt.key_cols_by(s=sample)
+    paths = hl.read_table(input_ht)
+    pairs_for_coverage = paths.annotate(pairs = (paths.batch, paths.coverage)).pairs.collect()
+    for batch, base_level_coverage_metrics in pairs_for_coverage:
+        # mt = hl.import_matrix_table(
+        #     base_level_coverage_metrics,
+        #     delimiter="\t",
+        #     row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
+        #     row_key=["chrom", "pos"],
+        #     min_partitions=args.n_read_partitions,
+        # )
+        # if not keep_targets:
+        #     mt = mt.drop("target")
+        # else:
+        #     mt = mt.key_rows_by(*["chrom", "pos", "target"])
+        # mt = mt.rename({"x": "coverage"})
+        # mt = mt.key_cols_by(s=sample)
 
-            mt = hl.import_table(
-                base_level_coverage_metrics,
-                delimiter='\t',
-                types={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr, "coverage": hl.tint}
-            ).annotate(s=sample
-            ).to_matrix_table(row_key=['chrom','pos'], col_key=['s'], row_fields=['target'], 
-                            n_partitions=args.n_read_partitions)
-            if not keep_targets:
-                mt = mt.drop("target")
-            else:
-                mt = mt.key_rows_by(*["chrom", "pos", "target"])
+        mt = hl.import_table(
+            base_level_coverage_metrics,
+            delimiter='\t',
+            types={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr, "coverage": hl.tint}
+        ).annotate(batch=batch
+        ).to_matrix_table(row_key=['chrom','pos'], col_key=['s'], row_fields=['target'], 
+                          n_partitions=args.n_read_partitions, col_fields=['batch'])
+        if not keep_targets:
+            mt = mt.drop("target")
+        else:
+            mt = mt.key_rows_by(*["chrom", "pos", "target"])
 
-            mt_list.append(mt)
-            if idx % 500 == 0:
-                logger.info(f"Imported sample {str(idx)}...")
+        mt_list.append(mt)
+        if idx % 500 == 0:
+            logger.info(f"Imported sample {str(idx)}...")
 
     logger.info("Joining individual coverage mts...")
     out_dir = dirname(output_ht)
@@ -197,8 +193,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-i",
-        "--input-tsv",
-        help="Input file with coverage files to combine in tab-delimited format of participant_id, base_level_coverage_metrics, sample",
+        "--input-ht",
+        help="Input ht with paths to coverage file.",
         required=True,
     )
     parser.add_argument(
