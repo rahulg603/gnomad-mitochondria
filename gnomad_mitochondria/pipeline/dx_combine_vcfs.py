@@ -164,9 +164,11 @@ def join_mitochondria_vcfs_into_mt(
     :return: Joined MatrixTable of samples given in vcf_paths dictionary
     """
     mt_list = []
+    idx = 0
     for batch, vcf_path in vcf_paths.items():
+        idx+=1
         try:
-            mt = hl.import_vcf(vcf_path, reference_genome="GRCh38")
+            mt = hl.import_vcf('file://' + vcf_path, reference_genome="GRCh38")
         except Exception as e:
             raise ValueError(
                 f"vcf path {vcf_path} does not exist for sample {batch}"
@@ -182,19 +184,15 @@ def join_mitochondria_vcfs_into_mt(
             for x, item_type in fields_of_interest.items():
                 if x not in mt.entry:
                     mt = mt.annotate_entries(**{x: hl.missing(item_type)})
-            mt = mt.select_entries("DP", "AD", *list(fields_of_interest.keys()), HL=mt.AF[0])
+            mt = mt.select_entries("DP", "AD", *list(fields_of_interest.keys()), "HL", "MQ", "TLOD", "FT")
             META_DICT['format'].update({'AD': {"Description": "Allelic depth of REF and ALT", "Number": "R", "Type": "Integer"},
                                         'OriginalSelfRefAlleles': {'Description':'Original self-reference alleles (only if alleles were changed in Liftover repair pipeline)', 'Number':'R', 'Type':'String'},
                                         'SwappedFieldIDs': {'Description':'Fields remapped during liftover (only if alleles were changed in Liftover repair pipeline)', 'Number':'1', 'Type':'String'}})
         else:
-            mt = mt.select_entries("DP", HL=mt.AF[0])
-        mt = mt.annotate_entries(
-            MQ=hl.float(mt.info["MMQ"][1]),
-            TLOD=mt.info["TLOD"][0],
-            FT=hl.if_else(hl.len(mt.filters) == 0, {"PASS"}, mt.filters),
-        )
+            mt = mt.select_entries("DP", "HL", "MQ", "TLOD", "FT")
         # Use GRCh37 reference as most external resources added in downstream scripts use GRCh37 contig names
         # (although note that the actual sequences of the mitochondria in both GRCh37 and GRCh38 are the same)
+        mt = mt.annotate_entries(FT = hl.set(mt.FT))
         mt = mt.key_rows_by(
             locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),
             alleles=mt.alleles,
@@ -202,6 +200,8 @@ def join_mitochondria_vcfs_into_mt(
         mt = mt.annotate_cols(batch=batch).key_cols_by('s')
         mt = mt.select_rows()
         mt_list.append(mt)
+        if idx % 20 == 0:
+            logger.info(f"Imported batch {str(idx)}...")
 
     combined_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size)
 
@@ -356,7 +356,6 @@ def main(args):  # noqa: D103
     # start SQL session and initialize constants
     my_database = dxpy.find_one_data_object(name=args.dx_init.lower())["id"]
     participant_data = f'dnax://{my_database}/{args.input_ht}'
-    stats_info = f'dnax://{my_database}/{args.stats}'
     coverage_mt_path = f'dnax://{my_database}/{args.coverage_mt_path}/'
     output_bucket = f'dnax://{my_database}/{args.output_bucket}'
     temp_dir = f'dnax://{my_database}/{args.temp_dir}/'
@@ -379,6 +378,7 @@ def main(args):  # noqa: D103
         hl._set_flags(no_whole_stage_codegen="1")
 
     output_path_mt = f"{output_bucket}/raw_combined.mt"
+    output_path_mt_2 = f"{output_bucket}/raw_combined_2.mt"
 
     if args.overwrite == False and hl.hadoop_exists(output_path_mt):
         logger.warning(
@@ -393,40 +393,39 @@ def main(args):  # noqa: D103
 
     logger.info("Combining VCFs...")
     combined_mt = join_mitochondria_vcfs_into_mt(vcf_paths, temp_dir, chunk_size, include_extra_v2_fields)
-    combined_mt = combined_mt.checkpoint(output_path_mt, overwrite=args.overwrite)
+    combined_mt = combined_mt.repartition(100).checkpoint(output_path_mt, overwrite=args.overwrite)
 
     logger.info("Removing select sample-level filters...")
     combined_mt = remove_genotype_filters(combined_mt)
-    per_sample_stats = hl.read_table(stats_info)
 
     logger.info("Determining homoplasmic reference sites...")
-    combined_mt = determine_hom_refs(
-        combined_mt, coverage_mt_path, minimum_homref_coverage
-    )
-    combined_mt = combined_mt.annotate_cols(nuc_mean_coverage = per_sample_stats[combined_mt.col_key].nuc_mean_coverage)
+    combined_mt = determine_hom_refs(combined_mt, coverage_mt_path, minimum_homref_coverage)
+    combined_mt = combined_mt.checkpoint(output_path_mt_2, overwrite=args.overwrite)
 
     logger.info("Applying artifact_prone_site fiter...")
     combined_mt = apply_mito_artifact_filter(combined_mt, artifact_prone_sites_path, artifact_prone_sites_reference)
 
-    logger.info("Writing combined MT and VCF...")
+    logger.info("Writing combined MT...")
     # Set the file names for output files
-    out_vcf = f"{output_bucket}/{file_name}.vcf.bgz"
+    out_vcf = f"file://{os.getcwd()}/{file_name}.vcf.bgz"
     out_mt = f"{output_bucket}/{file_name}.mt"
+    out_tsv = f"file://{os.getcwd()}/{file_name}.tsv.bgz"
 
-    combined_mt = combined_mt.checkpoint(out_mt, overwrite=args.overwrite)
+    combined_mt = combined_mt.repartition(1000).checkpoint(out_mt, overwrite=args.overwrite)
+
+    logger.info("Writing trimmed variants table...")
+    ht_for_tsv = combined_mt.entries()
+    ht_for_tsv = ht_for_tsv.annotate(HL=hl.if_else(hl.is_defined(ht_for_tsv['HL']), ht_for_tsv['HL'], 0))
+    ht_for_tsv = ht_for_tsv.annotate(FT=hl.if_else(ht_for_tsv['HL']==0, hl.missing('set<str>'), ht_for_tsv['FT']))
+    ht_for_tsv = ht_for_tsv.filter(ht_for_tsv.HL > 0)
+    ht_for_tsv.repartition(50).export(out_tsv)
+
+    logger.info("Writing combined VCF...")
     # For the VCF output, join FT values by semicolon
     combined_mt = combined_mt.annotate_entries(
         FT=hl.str(";").join(hl.array(combined_mt.FT))
     )
-    hl.export_vcf(combined_mt, out_vcf, metadata=META_DICT)
-
-    logger.info("Writing trimmed variants table...")
-    out_tsv = f"{output_bucket}/{file_name}.tsv.bgz"
-    ht_for_tsv = hl.read_matrix_table(out_mt).entries()
-    ht_for_tsv = ht_for_tsv.annotate(HL=hl.if_else(hl.is_defined(ht_for_tsv['HL']), ht_for_tsv['HL'], 0))
-    ht_for_tsv = ht_for_tsv.annotate(FT=hl.if_else(ht_for_tsv['HL']==0, hl.missing('set<str>'), ht_for_tsv['FT']))
-    ht_for_tsv = ht_for_tsv.filter(ht_for_tsv.HL > 0)
-    ht_for_tsv.export(out_tsv)
+    hl.repartition(100).export_vcf(combined_mt, out_vcf, metadata=META_DICT)
 
 
 
@@ -504,9 +503,6 @@ if __name__ == "__main__":
     p.add_argument("--include-extra-v2-fields", help="Loads in exåtra fields from MitochondriaPipeline v2.1, specifically AD, OriginalSelfRefAlleles, and SwappedFieldIDs. If missing will fill with missing.", action="store_true")
     p.add_argument(
         "--dx-init", type=str, required=True, help='SQL database path for use in DNAnexus.'
-    )    
-    p.add_argument(
-        "--stats", type=str, required=True, help='Path to ht containing per-sample statistics.'
     )
 
     args = p.parse_args()

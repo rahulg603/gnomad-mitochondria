@@ -166,7 +166,7 @@ def main(args):  # noqa: D103
         sample_mt.coverage.export(output_samples)
 
     logger.info("Writing coverage mt and ht...")
-    cov_mt.write(output_mt, overwrite=overwrite)
+    cov_mt.repartition(1000).write(output_mt, overwrite=overwrite)
     cov_ht = cov_mt.rows()
     cov_ht = cov_ht.checkpoint(output_ht, overwrite=overwrite)
     if not args.hail_only:
