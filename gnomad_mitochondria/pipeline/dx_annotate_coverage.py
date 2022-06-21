@@ -120,6 +120,7 @@ def main(args):  # noqa: D103
     paths = hl.read_table(input_ht)
     pairs_for_coverage = paths.annotate(pairs = (paths.batch, paths.coverage)).pairs.collect()
     for batch, base_level_coverage_metrics in pairs_for_coverage:
+        idx+=1
         mt = hl.import_matrix_table(
             'file://' + base_level_coverage_metrics,
             delimiter="\t",
@@ -135,8 +136,8 @@ def main(args):  # noqa: D103
         mt = mt.annotate_cols(batch = batch)
 
         mt_list.append(mt)
-        if idx % 500 == 0:
-            logger.info(f"Imported sample {str(idx)}...")
+        if idx % 10 == 0:
+            logger.info(f"Imported batch {str(idx)}...")
 
     logger.info("Joining individual coverage mts...")
     cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions)

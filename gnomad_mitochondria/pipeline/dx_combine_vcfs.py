@@ -199,7 +199,7 @@ def join_mitochondria_vcfs_into_mt(
             locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),
             alleles=mt.alleles,
         )
-        mt = mt.key_cols_by(batch=batch)
+        mt = mt.annotate_cols(batch=batch).key_cols_by('s')
         mt = mt.select_rows()
         mt_list.append(mt)
 
@@ -419,6 +419,15 @@ def main(args):  # noqa: D103
         FT=hl.str(";").join(hl.array(combined_mt.FT))
     )
     hl.export_vcf(combined_mt, out_vcf, metadata=META_DICT)
+
+    logger.info("Writing trimmed variants table...")
+    out_tsv = f"{output_bucket}/{file_name}.tsv.bgz"
+    ht_for_tsv = hl.read_matrix_table(out_mt).entries()
+    ht_for_tsv = ht_for_tsv.annotate(HL=hl.if_else(hl.is_defined(ht_for_tsv['HL']), ht_for_tsv['HL'], 0))
+    ht_for_tsv = ht_for_tsv.annotate(FT=hl.if_else(ht_for_tsv['HL']==0, hl.missing('set<str>'), ht_for_tsv['FT']))
+    ht_for_tsv = ht_for_tsv.filter(ht_for_tsv.HL > 0)
+    ht_for_tsv.export(out_tsv)
+
 
 
 if __name__ == "__main__":
