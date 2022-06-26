@@ -330,8 +330,13 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     
     # checks on dict
     print('Running checks...')
-    batches = [[os.path.basename(os.path.dirname(x)) for x in v] for k,v in data_dict.items()]
-    if not all([len(set(x)) == len(x) for x in batches]):
+    batches = {k: [os.path.basename(os.path.dirname(x)) for x in v] for k,v in data_dict.items()}
+    if not all([len(set(x)) == len(x) for _, x in batches.items()]):
+        for k,v in batches.items():
+            print(f'Duplicate batches in {k}:')
+            multiple_found = {x: v.count(x) for x in set(v) if v.count(x) > 1}
+            for item, idx in multiple_found.items():
+                print(item + ' has ' + str(idx) + ' items.')
         raise ValueError('ERROR: there are duplicate batches (or multiple files per batch).')
     
     # obtain paths
