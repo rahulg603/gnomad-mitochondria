@@ -359,8 +359,11 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
 
     # import stats and qc and merge all into table
     print('Importing all statistics...')
+    print('Importing run statistics...')
     stats_table = import_and_cat_tables(downloaded_files, 'batch', 'stats', 'batch', enforce_nonmiss=False)
+    print('Importing yield statistics...')
     yield_table = import_and_cat_tables(downloaded_files, 'batch', 'yield', 'batch', enforce_nonmiss=False)
+    print('Importing idxstats statistics...')
     if avoid_filtering_idxstats_chr:
         idxstats_table = import_and_cat_tables(downloaded_files, 'batch', 'idxstats', 'batch', enforce_nonmiss=False)
     else:
