@@ -20,7 +20,7 @@ logger = logging.getLogger("Annotate coverage")
 logger.setLevel(logging.INFO)
 
 
-def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partitions: int) -> hl.MatrixTable:
+def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partitions: int, check_from_disk: bool) -> hl.MatrixTable:
     """
     Hierarchically join together MatrixTables in the provided list.
 
@@ -30,13 +30,38 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partition
     :return: Joined MatrixTable
     """
     # Convert the MatrixTables to tables where entries are an array of structs
-    staging = [mt.localize_entries("__entries", "__cols") for mt in mts]
+    if check_from_disk:
+        staging = [None, None]
+    else:
+        staging = [mt.localize_entries("__entries", "__cols") for mt in mts]
+    
     stage = 0
     while len(staging) > 1:
         # Calculate the number of jobs to run based on the chunk size
         n_jobs = int(math.ceil(len(staging) / chunk_size))
         info(f"multi_way_union_mts: stage {stage}: {n_jobs} total jobs")
+        
         next_stage = []
+        
+        if check_from_disk:
+            all_exists = True
+            for idx in range(n_jobs):
+                path = os.path.join(temp_dir, f"stage_{stage}_job_{idx}.ht")
+                exists = hl.hadoop_is_file(f'{path}/_SUCCESS')
+                if not exists:
+                    if stage == 0:
+                        raise ValueError('ERROR: --check-from-disk was enabled but not all stage 0 MTs were found. This is unsupported.')
+                    all_exists = False
+                    break
+            
+            if all_exists:
+                info(f"Reading stage {stage} from disk...")
+                staging.clear()
+                for idx in range(n_jobs):
+                    staging.append(hl.read_table(os.path.join(temp_dir, f"stage_{stage}_job_{idx}.ht")))
+                info(f"Stage {stage} imported from disk.")
+                stage += 1
+                continue
 
         for i in range(n_jobs):
             # Grab just the tables for the given job
@@ -98,6 +123,7 @@ def main(args):  # noqa: D103
     chunk_size = args.chunk_size
     overwrite = args.overwrite
     keep_targets = args.keep_targets
+    check_from_disk = args.check_from_disk
     sc = pyspark.SparkContext()
     spark = pyspark.sql.SparkSession(sc)
     hl.init(sc=sc, tmp_dir=temp_dir)
@@ -119,28 +145,31 @@ def main(args):  # noqa: D103
     idx = 0
     paths = hl.read_table(input_ht)
     pairs_for_coverage = paths.annotate(pairs = (paths.batch, paths.coverage)).pairs.collect()
-    for batch, base_level_coverage_metrics in pairs_for_coverage:
-        idx+=1
-        mt = hl.import_matrix_table(
-            'file://' + base_level_coverage_metrics,
-            delimiter="\t",
-            row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
-            row_key=["chrom", "pos"],
-            min_partitions=args.n_read_partitions,
-        )
-        if not keep_targets:
-            mt = mt.drop("target")
-        else:
-            mt = mt.key_rows_by(*["chrom", "pos", "target"])
-        mt = mt.key_cols_by().rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
-        mt = mt.annotate_cols(batch = batch)
+    if check_from_disk:
+        logger.info("NOTE: Skipping reading individual coverage MTs since --check-from-disk was enabled.")
+    else:
+        for batch, base_level_coverage_metrics in pairs_for_coverage:
+            idx+=1
+            mt = hl.import_matrix_table(
+                'file://' + base_level_coverage_metrics,
+                delimiter="\t",
+                row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
+                row_key=["chrom", "pos"],
+                min_partitions=args.n_read_partitions,
+            )
+            if not keep_targets:
+                mt = mt.drop("target")
+            else:
+                mt = mt.key_rows_by(*["chrom", "pos", "target"])
+            mt = mt.key_cols_by().rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
+            mt = mt.annotate_cols(batch = batch)
 
-        mt_list.append(mt)
-        if idx % 10 == 0:
-            logger.info(f"Imported batch {str(idx)}...")
+            mt_list.append(mt)
+            if idx % 10 == 0:
+                logger.info(f"Imported batch {str(idx)}...")
 
     logger.info("Joining individual coverage mts...")
-    cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions)
+    cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=check_from_disk)
     n_samples = cov_mt.count_cols()
 
     logger.info("Adding coverage annotations...")
@@ -209,6 +238,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--hail-only", action='store_true', help='Skip generating flat files.'
+    )
+    parser.add_argument(
+        "--check-from-disk", action='store_true', help='If enabled and if the correct number of temporary files are found for a given stage, will read from those files.'
     )
     parser.add_argument(
         "--dx-init", type=str, required=True, help='SQL database path for use in DNAnexus.'
