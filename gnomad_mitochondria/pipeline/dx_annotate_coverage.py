@@ -49,6 +49,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partition
                 path = os.path.join(temp_dir, f"stage_{stage}_job_{idx}.ht")
                 exists = hl.hadoop_is_file(f'{path}/_SUCCESS')
                 if not exists:
+                    print(path + ' is missing.')
                     if stage == 0:
                         raise ValueError('ERROR: --check-from-disk was enabled but not all stage 0 MTs were found. This is unsupported.')
                     all_exists = False
@@ -148,7 +149,7 @@ def main(args):  # noqa: D103
     if check_from_disk:
         logger.info("NOTE: Skipping reading individual coverage MTs since --check-from-disk was enabled.")
         n_append = len(pairs_for_coverage)-1
-        pairs_for_coverage = pairs_for_coverage[0]
+        pairs_for_coverage = pairs_for_coverage[0:1]
     
     for batch, base_level_coverage_metrics in pairs_for_coverage:
         idx+=1
