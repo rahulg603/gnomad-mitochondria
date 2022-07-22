@@ -213,6 +213,25 @@ def count_shards_single(storage_client, bucket, this_folder, run_folder):
     return len(shards)
 
 
+def produce_sample_lists(sub_id_file, sample_list_placeholder):
+    with open(sub_id_file, 'r') as sub_ids:
+        ids = sub_ids.readlines()
+    
+    df_list = []
+    batch_run_number = 0
+    for id in ids:
+        this_sample_loc = sample_list_placeholder.format(str(batch_run_number))
+        with open(this_sample_loc, 'r') as sample_id_list:
+            sample_ids = sample_id_list.readlines()
+        df = pd.DataFrame({'batch': ids, 'batch_run_number': id, 'sample_list_path': sample_ids})
+        df['shard'] = [f'shard-{str(x)}' for x in range(0, len(sample_ids))]
+        df_list.append(df)
+        batch_run_number+=1
+    
+    df_final = pd.concat(df_list, axis=0)
+    return df_final
+
+
 def print_log(success_only):
     print('')
     print('HACKY CROMWELL VISUALIZER')
@@ -233,6 +252,8 @@ parser.add_argument('--success-only', action='store_true', help='If enabled will
 parser.add_argument('--get-shard-count', action='store_true', help='Returns the number of shards generated.')
 parser.add_argument('--hide-pass', action='store_true', help='Hides pass (but stalled) shards from output.')
 parser.add_argument('--subfolder', type=str, default=None, help='Run path. If provided, will only analyze a single folder. If not enabled, will iterate through all folders in the --run-folder.')
+parser.add_argument('--sub-ids', type=str, help='Path to workflow IDs. Assumes this has the correct count and is ordered by the workflow number.')
+parser.add_argument('--sample-lists', type=str, help='Path to sample lists for analysis. Place {} where the workflow ID is.')
 parser.add_argument('--output', type=str, help='Prefix for output files. Only used if --check-success is enabled.')
 
 
@@ -242,7 +263,7 @@ if __name__ == '__main__':
     if args.success_only and args.get_shard_count:
         raise argparse.ArgumentError('ERROR: cannot enable both --success-only and --get-shard-count.')
     if args.success_only and args.hide_pass:
-        raise argparse.ArgumentError('ERROR:cannot enable both --success-only and --hide-pass.')
+        raise argparse.ArgumentError('ERROR: cannot enable both --success-only and --hide-pass.')
     
     bucket_id = os.path.basename(os.getenv("WORKSPACE_BUCKET"))
     storage_client = storage.Client()
@@ -272,7 +293,9 @@ if __name__ == '__main__':
                     running_batches = [(batch, this_res) for batch, (this_res, success) in zip(subfolders_to_test, res) if not success]
                     print(df_incomplete.groupby(['subpath_id','status'])['shard'].count().to_string())
 
+                    df_sample = produce_sample_lists(args.sub_ids, args.sample_lists)
                     df_fail = df_incomplete[df_incomplete.status == 'FAIL']
+                    df_fail = df_fail.merge(df_sample, on=['batch', 'shard'], how='left')
                     df_fail.to_csv(f'{args.output}.failure.tsv', sep='\t', index=False)
                     if df_fail.shape[0] > 0:
                         print('')
