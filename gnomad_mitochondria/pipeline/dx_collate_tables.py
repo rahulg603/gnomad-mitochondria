@@ -377,7 +377,13 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     )
 
     print('Importing all QC...')
-    qc_table = import_and_cat_tables(downloaded_qc_files, 's', 'qc', 's', append_ids_and_t=True, filter_by=list(stats_table['s']))
+    middle_id_item = set(stats_table.s.str.split('_').map(lambda x: x[1]))
+    if len(middle_id_item) != 1:
+        raise ValueError('ERROR: only a single ID second term is supported.')
+    else:
+        middle_id_item = list(middle_id_item)[0]
+    downloaded_qc_files['s_mod'] = downloaded_qc_files.s.str.split('_').map(lambda x: x[0] + '_' + middle_id_item + '_' + x[2] + '_' + x[3])
+    qc_table = import_and_cat_tables(downloaded_qc_files, 's_mod', 'qc', 's', append_ids_and_t=True, filter_by=list(stats_table['s']))
     final_stats_table = stats_table.merge(qc_table, how='outer', on='s'
                                   ).merge(yield_table, how='inner', on=['s','batch']
                                   ).merge(idxstats_summary, how='inner', on='s')
@@ -431,6 +437,7 @@ parser.add_argument('--avoid-filtering-idxstats-chr', action='store_true',
 
 # defaults for debugging
 pipeline_output_folder = '220618_MitochondriaPipelineSwirl/v2.5_Multi_first50/,220618_MitochondriaPipelineSwirl/20k/'
+pipeline_output_folder = '220618_MitochondriaPipelineSwirl/next8500_upto110k/'
 vcf_suffix = 'batch_merged_mt_calls.vcf.bgz'
 coverage_suffix = 'batch_merged_mt_coverage.tsv.bgz'
 mtstats_suffix = 'batch_analysis_statistics.tsv'
@@ -441,6 +448,7 @@ qc_suffix = '.qaqc_metrics'
 file_paths_table_output = 'tab_batch_file_paths.ht'
 per_sample_stats_output = 'tab_per_sample_stats.ht'
 dx_init = '220619_MitochondriaPipelineSwirl_v2_5_Multi_20k'
+dx_init = '220722_MitochondriaPipelineSwirl_v2_5_Multi_200k_test'
 avoid_filtering_idxstats_chr = False
 unified_prefix = 'batch_'
 
