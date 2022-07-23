@@ -202,7 +202,7 @@ def check_success_single(storage_client, bucket, this_folder, run_folder, succes
             df_pass = pd.DataFrame({'shard': [x for x, _, _, _ in passes], 'latest_task': [x for _, x, _, _ in passes], 
                                     'log_file': [x for _, _, x, _ in passes], 'status': ['PASS' for _ in passes], 
                                     'return_code': [x for _, _, _, x in passes]})
-            df = pd.concat([df_prog, df_fail, df_pass]).reset_index()
+            df = pd.concat([df_prog, df_fail, df_pass]).reset_index(drop=True)
     
     df['subpath_id'] = this_folder
     return df, not failed
@@ -215,20 +215,20 @@ def count_shards_single(storage_client, bucket, this_folder, run_folder):
 
 def produce_sample_lists(sub_id_file, sample_list_placeholder):
     with open(sub_id_file, 'r') as sub_ids:
-        ids = sub_ids.readlines()
+        ids = sub_ids.read().splitlines()
     
     df_list = []
     batch_run_number = 0
     for id in ids:
         this_sample_loc = sample_list_placeholder.format(str(batch_run_number))
         with open(this_sample_loc, 'r') as sample_id_list:
-            sample_ids = sample_id_list.readlines()
-        df = pd.DataFrame({'batch': ids, 'batch_run_number': id, 'sample_list_path': sample_ids})
+            sample_ids = sample_id_list.read().splitlines()
+        df = pd.DataFrame({'batch': id, 'batch_run_number': batch_run_number, 's': sample_ids})
         df['shard'] = [f'shard-{str(x)}' for x in range(0, len(sample_ids))]
         df_list.append(df)
         batch_run_number+=1
     
-    df_final = pd.concat(df_list, axis=0)
+    df_final = pd.concat(df_list, axis=0).reset_index(drop=True)
     return df_final
 
 
@@ -295,7 +295,7 @@ if __name__ == '__main__':
 
                     df_sample = produce_sample_lists(args.sub_ids, args.sample_lists)
                     df_fail = df_incomplete[df_incomplete.status == 'FAIL']
-                    df_fail = df_fail.merge(df_sample, on=['batch', 'shard'], how='left')
+                    df_fail = df_fail.merge(df_sample, left_on=['subpath_id', 'shard'], right_on=['batch', 'shard'], how='left')
                     df_fail.to_csv(f'{args.output}.failure.tsv', sep='\t', index=False)
                     if df_fail.shape[0] > 0:
                         print('')
