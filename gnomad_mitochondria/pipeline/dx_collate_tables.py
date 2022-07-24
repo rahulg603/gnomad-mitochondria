@@ -1,5 +1,6 @@
 import hail as hl
 import pandas as pd
+import numpy as np
 import argparse
 import dxpy
 import pyspark
@@ -8,6 +9,7 @@ import json
 import sys, os, glob, re
 import collections
 
+from datetime import datetime
 from dxpy.utils import file_load_utils
 from dxpy.bindings.download_all_inputs import _parallel_file_download, _get_num_parallel_threads, _create_dirs, \
                                               _sequential_file_download
@@ -320,7 +322,7 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     hl._set_flags(no_whole_stage_codegen='1')
 
     # download mito pipeline data
-    print('Finding all relevant data objects...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Finding all relevant data objects...')
     all_batch_files = dx_find_data_objects(pipeline_output_folder, unified_prefix + '*', True)
     data_dict = {'vcf': subset_to_data_objects(all_batch_files, vcf_suffix), 
                  'coverage': subset_to_data_objects(all_batch_files, coverage_suffix),
@@ -329,7 +331,7 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
                  'idxstats': subset_to_data_objects(all_batch_files, idxstats_suffix)}
     
     # checks on dict
-    print('Running checks...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Running checks...')
     batches = {k: [os.path.basename(os.path.dirname(x)) for x in v] for k,v in data_dict.items()}
     if not all([len(set(x)) == len(x) for _, x in batches.items()]):
         for k,v in batches.items():
@@ -340,11 +342,11 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
         raise ValueError('ERROR: there are duplicate batches (or multiple files per batch).')
     
     # obtain paths
-    print('Obtaining paths...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Obtaining paths...')
     downloaded_files = produce_fuse_file_table(data_dict, {'vcf':vcf_suffix, 'coverage':coverage_suffix, 'stats':mtstats_suffix, 'yield':yield_suffix, 'idxstats':idxstats_suffix})
 
     # checks on downloaded data
-    print('Checking file paths...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Checking file paths...')
     per_row_un = downloaded_files.apply(lambda x: x.apply(lambda y: os.path.basename(os.path.dirname(y))).unique(), 1)
     per_row_un = per_row_un.apply(lambda x: [item for item in x if len(item) != 0])
     if not all(per_row_un.apply(len) == 1):
@@ -353,17 +355,17 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
         raise ValueError('ERROR: all imported files must have the same batch order as the specified batch name.')
 
     # read qc metrics
-    print('Downloading QC metrics...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Downloading QC metrics...')
     data_dict_qc = {'qc': dx_find_data_objects(qc_stats_folder, '*'+qc_suffix, True)}
     downloaded_qc_files = produce_fuse_file_table(data_dict_qc, {'qc':qc_suffix}, single_sample=True)
 
     # import stats and qc and merge all into table
-    print('Importing all statistics...')
-    print('Importing run statistics...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Importing all statistics...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Importing run statistics...')
     stats_table = import_and_cat_tables(downloaded_files, 'batch', 'stats', 'batch', enforce_nonmiss=False)
-    print('Importing yield statistics...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Importing yield statistics...')
     yield_table = import_and_cat_tables(downloaded_files, 'batch', 'yield', 'batch', enforce_nonmiss=False)
-    print('Importing idxstats statistics...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Importing idxstats statistics...')
     if avoid_filtering_idxstats_chr:
         idxstats_table = import_and_cat_tables(downloaded_files, 'batch', 'idxstats', 'batch', enforce_nonmiss=False)
     else:
@@ -376,7 +378,7 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
         genome_length=pd.NamedAgg(column='len', aggfunc='sum')
     )
 
-    print('Importing all QC...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Importing all QC...')
     middle_id_item = set(stats_table.s.str.split('_').map(lambda x: x[1]))
     if len(middle_id_item) != 1:
         raise ValueError('ERROR: only a single ID second term is supported.')
@@ -390,18 +392,22 @@ def main(pipeline_output_folder, vcf_suffix, coverage_suffix, mtstats_suffix, yi
     final_stats_table = compute_nuc_coverage(final_stats_table, 'nuc_mean_coverage')
 
     # output
-    print('Outputting flat files...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Outputting flat files...')
     downloaded_files.to_csv(re.sub('ht$', 'tsv', file_paths_table_output), sep='\t', index=False)
     final_stats_table.to_csv(re.sub('ht$', 'tsv', per_sample_stats_output), sep='\t', index=False)
 
     # output to sql
-    print('Generating Hail tables and outputting to SQL database...')
+    print(f'{datetime.now().strftime("%H:%M:%S")}: Generating Hail tables and outputting to SQL database...')
     ht_files = hl.Table.from_pandas(downloaded_files).repartition(5).key_by('batch')
     #ht_files = hl.import_table('file://' + os.getcwd() + '/' + re.sub('ht$', 'tsv', file_paths_table_output), impute=True, min_partitions=5)
     ht_files.write(f'dnax://{my_database}/{file_paths_table_output}', overwrite=True)
     
+    #final_stats_table = pd.read_csv(os.getcwd() + '/' + re.sub('ht$', 'tsv', per_sample_stats_output), sep='\t')
+    final_stats_table['genetic_sex'] = final_stats_table.genetic_sex.astype(str)
+    for field in ['discordance_prc', 'read_haps_error_percentage', 'freemix_percentage', 'yield', 'prc_proper_pairs', 'prc_auto_ge_15x']:
+        final_stats_table[field] = final_stats_table[field].map(lambda x: np.nan if x == 'None' else x).astype(float)
     ht_stats = hl.Table.from_pandas(final_stats_table).repartition(50).key_by('s')
-    #ht_stats = hl.import_table('file://' + os.getcwd() + '/' + re.sub('ht$', 'tsv', per_sample_stats_output), impute=True, min_partitions=50)
+    #ht_stats = hl.import_table('file:///' + os.getcwd() + '/' + re.sub('ht$', 'tsv', per_sample_stats_output), impute=True, min_partitions=50)
     ht_stats.write(f'dnax://{my_database}/{per_sample_stats_output}', overwrite=True)
 
 
@@ -437,7 +443,7 @@ parser.add_argument('--avoid-filtering-idxstats-chr', action='store_true',
 
 # defaults for debugging
 pipeline_output_folder = '220618_MitochondriaPipelineSwirl/v2.5_Multi_first50/,220618_MitochondriaPipelineSwirl/20k/'
-pipeline_output_folder = '220618_MitochondriaPipelineSwirl/next8500_upto110k/'
+pipeline_output_folder = '220618_MitochondriaPipelineSwirl/20k/,220618_MitochondriaPipelineSwirl/next24500/,220618_MitochondriaPipelineSwirl/next10k_upto55k/,220618_MitochondriaPipelineSwirl/next45k_upto100k/,220618_MitochondriaPipelineSwirl/next8500_upto110k/,220618_MitochondriaPipelineSwirl/next8500_upto110k_p2/,220618_MitochondriaPipelineSwirl/next8500_upto110k_p3/,220618_MitochondriaPipelineSwirl/next28k_upto137k/,220618_MitochondriaPipelineSwirl/next9k_upto146k/,220618_MitochondriaPipelineSwirl/next27k_upto173k/,220618_MitochondriaPipelineSwirl/final27k_upto200k/'
 vcf_suffix = 'batch_merged_mt_calls.vcf.bgz'
 coverage_suffix = 'batch_merged_mt_coverage.tsv.bgz'
 mtstats_suffix = 'batch_analysis_statistics.tsv'
@@ -448,7 +454,7 @@ qc_suffix = '.qaqc_metrics'
 file_paths_table_output = 'tab_batch_file_paths.ht'
 per_sample_stats_output = 'tab_per_sample_stats.ht'
 dx_init = '220619_MitochondriaPipelineSwirl_v2_5_Multi_20k'
-dx_init = '220722_MitochondriaPipelineSwirl_v2_5_Multi_200k_test'
+dx_init = '220722_MitochondriaPipelineSwirl_v2_5_Multi_200k'
 avoid_filtering_idxstats_chr = False
 unified_prefix = 'batch_'
 
