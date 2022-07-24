@@ -201,7 +201,7 @@ def main(args):  # noqa: D103
         sample_mt.coverage.export(output_samples)
 
     logger.info("Writing coverage mt and ht...")
-    cov_mt.repartition(1000).write(output_mt, overwrite=overwrite)
+    cov_mt.repartition(args.n_final_partitions).write(output_mt, overwrite=overwrite)
     cov_ht = cov_mt.rows()
     cov_ht = cov_ht.checkpoint(output_ht, overwrite=overwrite)
     if not args.hail_only:
@@ -250,6 +250,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--dx-init", type=str, required=True, help='SQL database path for use in DNAnexus.'
+    )
+    parser.add_argument(
+        "--n-final-partitions", type=int, default=1000, help='Number of partitions for final mt.'
     )
 
     args = parser.parse_args()
