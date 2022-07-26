@@ -192,11 +192,11 @@ def main(args):  # noqa: D103
 
                 logger.info(f"Joining individual coverage mts for subset {str(subset_number)}...")
                 cov_mt_this = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=False, prefix=this_prefix)
-                cov_mt_this = cov_mt_this.repartition(args.n_final_partition // num_merges).checkpoint(this_subset_mt, overwrite=True)
+                cov_mt_this = cov_mt_this.repartition(args.n_final_partitions // num_merges).checkpoint(this_subset_mt, overwrite=True)
                 mt_list_subsets.append(cov_mt_this)
         merged_prefix = f'coverage_merging_final_{str(num_merges)}subsets/'
         cov_mt = multi_way_union_mts(mt_list_subsets, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=False, prefix=merged_prefix)
-        cov_mt = cov_mt.repartition(args.n_final_partition).checkpoint(merged_prefix + 'merged.mt', overwrite=True)
+        cov_mt = cov_mt.repartition(args.n_final_partitions).checkpoint(merged_prefix + 'merged.mt', overwrite=True)
     else:
         mt_list = []
         idx = 0
