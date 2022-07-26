@@ -20,7 +20,7 @@ logger = logging.getLogger("Annotate coverage")
 logger.setLevel(logging.INFO)
 
 
-def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partitions: int, check_from_disk: bool) -> hl.MatrixTable:
+def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partitions: int, check_from_disk: bool, prefix: str) -> hl.MatrixTable:
     """
     Hierarchically join together MatrixTables in the provided list.
 
@@ -74,7 +74,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partition
             # Multiway zip join will produce an __entries annotation, which is an array where each element is a struct containing the __entries annotation (array of structs) for that sample
             merged = hl.Table.multi_way_zip_join(to_merge, "__entries", "__cols")
             if min_partitions > 10:
-                merged = merged.checkpoint(f"stage_{stage}_job_{i}_pre.ht", overwrite=True)
+                merged = merged.checkpoint(f"{prefix}stage_{stage}_job_{i}_pre.ht", overwrite=True)
             # Flatten __entries while taking into account different entry lengths at different samples/variants (samples lacking a variant will be NA)
             merged = merged.annotate(
                 __entries=hl.flatten(
@@ -99,7 +99,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partition
 
             next_stage.append(
                 merged.checkpoint(
-                    os.path.join(temp_dir, f"stage_{stage}_job_{i}.ht"), overwrite=True
+                    os.path.join(temp_dir, f"{prefix}stage_{stage}_job_{i}.ht"), overwrite=True
                 )
             )
         info(f"Completed stage {stage}")
@@ -115,6 +115,17 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, min_partition
     )
 
 
+def chunks(items, binsize):
+    lst = []
+    for item in items:
+        lst.append(item)
+        if len(lst) == binsize:
+            yield lst
+            lst = []
+    if len(lst) > 0:
+        yield lst
+
+
 def main(args):  # noqa: D103
     # start SQL session and initialize constants
     my_database = dxpy.find_one_data_object(name=args.dx_init.lower())["id"]
@@ -125,6 +136,7 @@ def main(args):  # noqa: D103
     overwrite = args.overwrite
     keep_targets = args.keep_targets
     check_from_disk = args.check_from_disk
+    num_merges = args.split_merging
     sc = pyspark.SparkContext()
     spark = pyspark.sql.SparkSession(sc)
     hl.init(sc=sc, tmp_dir=temp_dir)
@@ -139,43 +151,85 @@ def main(args):  # noqa: D103
     if not output_ht.endswith(".ht"):
         sys.exit("Path supplied as output_ht must end with .ht extension")
 
-    mt_list = []
     logger.info(
         "Reading in individual coverage files as matrix tables and adding to a list of matrix tables..."
     )
-    idx = 0
     paths = hl.read_table(input_ht)
     pairs_for_coverage = paths.annotate(pairs = (paths.batch, paths.coverage)).pairs.collect()
-    if check_from_disk:
-        logger.info("NOTE: Skipping reading individual coverage MTs since --check-from-disk was enabled.")
-        n_append = len(pairs_for_coverage)-1
-        pairs_for_coverage = pairs_for_coverage[0:1]
-    
-    for batch, base_level_coverage_metrics in pairs_for_coverage:
-        idx+=1
-        mt = hl.import_matrix_table(
-            'file://' + base_level_coverage_metrics,
-            delimiter="\t",
-            row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
-            row_key=["chrom", "pos"],
-            min_partitions=args.n_read_partitions,
-        )
-        if not keep_targets:
-            mt = mt.drop("target")
-        else:
-            mt = mt.key_rows_by(*["chrom", "pos", "target"])
-        mt = mt.key_cols_by().rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
-        mt = mt.annotate_cols(batch = batch)
 
-        mt_list.append(mt)
-        if idx % 10 == 0:
-            logger.info(f"Imported batch {str(idx)}...")
+    if num_merges > 1:
+        # check_from_disk is not compatible with multiple merges and will not be used
+        subsets = chunks(pairs_for_coverage, len(pairs_for_coverage) // num_merges)
+        mt_list_subsets = []
+        for subset_number, subset in enumerate(subsets):
+            print(f'Importing subset {str(subset_number)}...')
+            this_prefix = f'coverage_merging_subset{str(subset_number)}_{str(num_merges)}subsets/'
+            this_subset_mt = os.path.join(temp_dir, f"{this_prefix}final_merged.mt")
+            if hl.hadoop_is_file(f'{this_subset_mt}/_SUCCESS'):
+                mt_list_subsets.append(hl.read_matrix_table(this_subset_mt))
+            else:
+                mt_list = []
+                idx = 0
+                for batch, base_level_coverage_metrics in subset:
+                    idx+=1
+                    mt = hl.import_matrix_table(
+                        'file://' + base_level_coverage_metrics,
+                        delimiter="\t",
+                        row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
+                        row_key=["chrom", "pos"],
+                        min_partitions=args.n_read_partitions,
+                    )
+                    if not keep_targets:
+                        mt = mt.drop("target")
+                    else:
+                        mt = mt.key_rows_by(*["chrom", "pos", "target"])
+                    mt = mt.key_cols_by().rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
+                    mt = mt.annotate_cols(batch = batch)
 
-    if check_from_disk:
-        mt_list.extend([None for x in range(n_append)])
+                    mt_list.append(mt)
+                    if idx % 10 == 0:
+                        logger.info(f"Imported batch {str(idx)}, subset {str(subset_number)}...")
 
-    logger.info("Joining individual coverage mts...")
-    cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=check_from_disk)
+                logger.info(f"Joining individual coverage mts for subset {str(subset_number)}...")
+                cov_mt_this = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=False, prefix=this_prefix)
+                cov_mt_this = cov_mt_this.repartition(args.n_final_partition // num_merges).checkpoint(this_subset_mt, overwrite=True)
+                mt_list_subsets.append(cov_mt_this)
+        merged_prefix = f'coverage_merging_final_{str(num_merges)}subsets/'
+        cov_mt = multi_way_union_mts(mt_list_subsets, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=False, prefix=merged_prefix)
+        cov_mt = cov_mt.repartition(args.n_final_partition).checkpoint(merged_prefix + 'merged.mt', overwrite=True)
+    else:
+        mt_list = []
+        idx = 0
+        if check_from_disk:
+            logger.info("NOTE: Skipping reading individual coverage MTs since --check-from-disk was enabled.")
+            n_append = len(pairs_for_coverage)-1
+            pairs_for_coverage = pairs_for_coverage[0:1]
+        
+        for batch, base_level_coverage_metrics in pairs_for_coverage:
+            idx+=1
+            mt = hl.import_matrix_table(
+                'file://' + base_level_coverage_metrics,
+                delimiter="\t",
+                row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
+                row_key=["chrom", "pos"],
+                min_partitions=args.n_read_partitions,
+            )
+            if not keep_targets:
+                mt = mt.drop("target")
+            else:
+                mt = mt.key_rows_by(*["chrom", "pos", "target"])
+            mt = mt.key_cols_by().rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
+            mt = mt.annotate_cols(batch = batch)
+
+            mt_list.append(mt)
+            if idx % 10 == 0:
+                logger.info(f"Imported batch {str(idx)}...")
+
+        if check_from_disk:
+            mt_list.extend([None for x in range(n_append)])
+
+        logger.info("Joining individual coverage mts...")
+        cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=check_from_disk, prefix='')
     n_samples = cov_mt.count_cols()
 
     logger.info("Adding coverage annotations...")
@@ -253,6 +307,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--n-final-partitions", type=int, default=1000, help='Number of partitions for final mt.'
+    )
+    parser.add_argument(
+        '--split-merging', type=int, default=1, help='Will split the merging into this many jobs which will be merged at the end. Uses the same order each time such that if it fails we can read from previous files.'
     )
 
     args = parser.parse_args()
