@@ -167,6 +167,7 @@ def main(args):  # noqa: D103
             this_subset_mt = os.path.join(temp_dir, f"{this_prefix}final_merged.mt")
             if hl.hadoop_is_file(f'{this_subset_mt}/_SUCCESS'):
                 mt_list_subsets.append(hl.read_matrix_table(this_subset_mt))
+                print(f'Subset {str(subset_number)} already processed and imported with {str(mt_list_subsets[len(mt_list_subsets)].count_cols())} samples.')
             else:
                 mt_list = []
                 idx = 0
