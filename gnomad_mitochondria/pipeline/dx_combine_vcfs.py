@@ -1,4 +1,5 @@
 import argparse
+from curses import pair_content
 import logging
 import math
 import os
@@ -84,7 +85,7 @@ def collect_vcf_paths(
     return vcf_paths
 
 
-def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int) -> hl.MatrixTable:
+def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, prefix: str) -> hl.MatrixTable:
     """
     Hierarchically join together MatrixTables in the provided list.
 
@@ -135,7 +136,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int) -> hl.MatrixT
 
             next_stage.append(
                 merged.checkpoint(
-                    os.path.join(temp_dir, f"stage_{stage}_job_{i}.ht"), overwrite=True
+                    os.path.join(temp_dir, f"{prefix}stage_{stage}_job_{i}.ht"), overwrite=True
                 )
             )
         hl.utils.java.info(f"Completed stage {stage}")
@@ -152,7 +153,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int) -> hl.MatrixT
 
 
 def join_mitochondria_vcfs_into_mt(
-    vcf_paths: Dict[str, str], temp_dir: str, chunk_size: int = 100, include_extra_v2_fields: bool = False
+    vcf_paths: Dict[str, str], temp_dir: str, chunk_size: int = 100, include_extra_v2_fields: bool = False, num_merges: int = 1
 ) -> hl.MatrixTable:
     """
     Reformat and join individual mitochondrial VCFs into one MatrixTable.
@@ -163,47 +164,69 @@ def join_mitochondria_vcfs_into_mt(
     :param include_extra_v2_fields: Includes extra fields important for analysis of v2.1 source MTs
     :return: Joined MatrixTable of samples given in vcf_paths dictionary
     """
-    mt_list = []
-    idx = 0
-    for batch, vcf_path in vcf_paths.items():
-        idx+=1
-        try:
-            mt = hl.import_vcf('file://' + vcf_path, reference_genome="GRCh38")
-        except Exception as e:
-            raise ValueError(
-                f"vcf path {vcf_path} does not exist for sample {batch}"
-            ) from e
-
-        # Because the vcfs are split, there is only one AF value, although misinterpreted as an array because Number=A in VCF header
-        # Second value of MMQ is the value of the mapping quality for the alternate allele
-        # Add FT annotation for sample genotype filters (pull these from filters annotations of the single-sample VCFs)
-        if include_extra_v2_fields:
-            fields_of_interest = {'OriginalSelfRefAlleles':'array<str>', 'SwappedFieldIDs':'str'}
-            if 'GT' in mt.entry:
-                mt = mt.drop('GT')
-            for x, item_type in fields_of_interest.items():
-                if x not in mt.entry:
-                    mt = mt.annotate_entries(**{x: hl.missing(item_type)})
-            mt = mt.select_entries("DP", "AD", *list(fields_of_interest.keys()), "HL", "MQ", "TLOD", "FT")
-            META_DICT['format'].update({'AD': {"Description": "Allelic depth of REF and ALT", "Number": "R", "Type": "Integer"},
-                                        'OriginalSelfRefAlleles': {'Description':'Original self-reference alleles (only if alleles were changed in Liftover repair pipeline)', 'Number':'R', 'Type':'String'},
-                                        'SwappedFieldIDs': {'Description':'Fields remapped during liftover (only if alleles were changed in Liftover repair pipeline)', 'Number':'1', 'Type':'String'}})
+    list_paths = list(zip(vcf_paths))
+    list_paths.sort(key=lambda y: y[0])
+    if num_merges == 1:
+        vcf_path_list = [list_paths]
+    else:
+        vcf_path_list = chunks(list_paths, len(list_paths) // num_merges)
+    mt_list_subsets = []
+    for subset_number, subset in enumerate(vcf_path_list):
+        print(f'Importing subset {str(subset_number)}...')
+        this_prefix = f'variant_merging_subset{str(subset_number)}_{str(num_merges)}subsets/'
+        this_subset_mt = os.path.join(temp_dir, f"{this_prefix}final_merged.mt")
+        if hl.hadoop_is_file(f'{this_subset_mt}/_SUCCESS'):
+            mt_list_subsets.append(hl.read_matrix_table(this_subset_mt))
+            print(f'Subset {str(subset_number)} already processed and imported with {str(mt_list_subsets[len(mt_list_subsets)-1].count_cols())} samples.')
         else:
-            mt = mt.select_entries("DP", "HL", "MQ", "TLOD", "FT")
-        # Use GRCh37 reference as most external resources added in downstream scripts use GRCh37 contig names
-        # (although note that the actual sequences of the mitochondria in both GRCh37 and GRCh38 are the same)
-        mt = mt.annotate_entries(FT = hl.set(mt.FT))
-        mt = mt.key_rows_by(
-            locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),
-            alleles=mt.alleles,
-        )
-        mt = mt.annotate_cols(batch=batch).key_cols_by('s')
-        mt = mt.select_rows()
-        mt_list.append(mt)
-        if idx % 20 == 0:
-            logger.info(f"Imported batch {str(idx)}...")
+            mt_list = []
+            idx = 0
+            for batch, vcf_path in subset:
+                idx+=1
+                try:
+                    mt = hl.import_vcf('file://' + vcf_path, reference_genome="GRCh38")
+                except Exception as e:
+                    raise ValueError(
+                        f"vcf path {vcf_path} does not exist for sample {batch}"
+                    ) from e
 
-    combined_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size)
+                # Because the vcfs are split, there is only one AF value, although misinterpreted as an array because Number=A in VCF header
+                # Second value of MMQ is the value of the mapping quality for the alternate allele
+                # Add FT annotation for sample genotype filters (pull these from filters annotations of the single-sample VCFs)
+                if include_extra_v2_fields:
+                    fields_of_interest = {'OriginalSelfRefAlleles':'array<str>', 'SwappedFieldIDs':'str'}
+                    if 'GT' in mt.entry:
+                        mt = mt.drop('GT')
+                    for x, item_type in fields_of_interest.items():
+                        if x not in mt.entry:
+                            mt = mt.annotate_entries(**{x: hl.missing(item_type)})
+                    mt = mt.select_entries("DP", "AD", *list(fields_of_interest.keys()), "HL", "MQ", "TLOD", "FT")
+                    META_DICT['format'].update({'AD': {"Description": "Allelic depth of REF and ALT", "Number": "R", "Type": "Integer"},
+                                                'OriginalSelfRefAlleles': {'Description':'Original self-reference alleles (only if alleles were changed in Liftover repair pipeline)', 'Number':'R', 'Type':'String'},
+                                                'SwappedFieldIDs': {'Description':'Fields remapped during liftover (only if alleles were changed in Liftover repair pipeline)', 'Number':'1', 'Type':'String'}})
+                else:
+                    mt = mt.select_entries("DP", "HL", "MQ", "TLOD", "FT")
+                # Use GRCh37 reference as most external resources added in downstream scripts use GRCh37 contig names
+                # (although note that the actual sequences of the mitochondria in both GRCh37 and GRCh38 are the same)
+                mt = mt.annotate_entries(FT = hl.set(mt.FT))
+                mt = mt.key_rows_by(
+                    locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),
+                    alleles=mt.alleles,
+                )
+                mt = mt.annotate_cols(batch=batch).key_cols_by('s')
+                mt = mt.select_rows()
+                mt_list.append(mt)
+                if idx % 20 == 0:
+                    logger.info(f"Imported batch {str(idx)}...")
+
+            combined_mt_this = multi_way_union_mts(mt_list, temp_dir, chunk_size, prefix=this_prefix)
+            mt_list_subsets.append(combined_mt_this)
+    
+    if num_merges == 1:
+        combined_mt = mt_list_subsets[0]
+    else:
+        merged_prefix = f'variant_merging_final_{str(num_merges)}subsets/'
+        combined_mt = multi_way_union_mts(mt_list_subsets, temp_dir, chunk_size, prefix=merged_prefix)
 
     return combined_mt
 
@@ -352,6 +375,17 @@ def apply_mito_artifact_filter(
     return mt
 
 
+def chunks(items, binsize):
+    lst = []
+    for item in items:
+        lst.append(item)
+        if len(lst) == binsize:
+            yield lst
+            lst = []
+    if len(lst) > 0:
+        yield lst
+
+
 def main(args):  # noqa: D103
     # start SQL session and initialize constants
     my_database = dxpy.find_one_data_object(name=args.dx_init.lower())["id"]
@@ -366,6 +400,7 @@ def main(args):  # noqa: D103
     include_extra_v2_fields = args.include_extra_v2_fields
     file_name = args.file_name
     minimum_homref_coverage = args.minimum_homref_coverage
+    num_merges = args.split_merging
     vcf_col_name = 'vcf'
     sc = pyspark.SparkContext()
     spark = pyspark.sql.SparkSession(sc)
@@ -392,7 +427,7 @@ def main(args):  # noqa: D103
     )
 
     logger.info("Combining VCFs...")
-    combined_mt = join_mitochondria_vcfs_into_mt(vcf_paths, temp_dir, chunk_size, include_extra_v2_fields)
+    combined_mt = join_mitochondria_vcfs_into_mt(vcf_paths, temp_dir, chunk_size, include_extra_v2_fields, num_merges)
     combined_mt = combined_mt.repartition(100).checkpoint(output_path_mt, overwrite=args.overwrite)
 
     logger.info("Removing select sample-level filters...")
@@ -411,7 +446,7 @@ def main(args):  # noqa: D103
     out_mt = f"{output_bucket}/{file_name}.mt"
     out_tsv = f"file://{os.getcwd()}/{file_name}.tsv.bgz"
 
-    combined_mt = combined_mt.repartition(1000).checkpoint(out_mt, overwrite=args.overwrite)
+    combined_mt = combined_mt.repartition(args.n_final_partitions).checkpoint(out_mt, overwrite=args.overwrite)
 
     logger.info("Writing trimmed variants table...")
     ht_for_tsv = combined_mt.entries()
@@ -503,6 +538,12 @@ if __name__ == "__main__":
     p.add_argument("--include-extra-v2-fields", help="Loads in exåtra fields from MitochondriaPipeline v2.1, specifically AD, OriginalSelfRefAlleles, and SwappedFieldIDs. If missing will fill with missing.", action="store_true")
     p.add_argument(
         "--dx-init", type=str, required=True, help='SQL database path for use in DNAnexus.'
+    )
+    p.add_argument(
+        "--n-final-partitions", type=int, default=1000, help='Number of partitions for final mt.'
+    )
+    p.add_argument(
+        '--split-merging', type=int, default=1, help='Will split the merging into this many jobs which will be merged at the end. Uses the same order each time such that if it fails we can read from previous files.'
     )
 
     args = p.parse_args()
