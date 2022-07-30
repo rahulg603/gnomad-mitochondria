@@ -159,45 +159,48 @@ def main(args):  # noqa: D103
 
     if num_merges > 1:
         # check_from_disk is not compatible with multiple merges and will not be used
-        subsets = chunks(pairs_for_coverage, len(pairs_for_coverage) // num_merges)
-        mt_list_subsets = []
-        for subset_number, subset in enumerate(subsets):
-            print(f'Importing subset {str(subset_number)}...')
-            this_prefix = f'coverage_merging_subset{str(subset_number)}_{str(num_merges)}subsets/'
-            this_subset_mt = os.path.join(temp_dir, f"{this_prefix}final_merged.mt")
-            if hl.hadoop_is_file(f'{this_subset_mt}/_SUCCESS'):
-                mt_list_subsets.append(hl.read_matrix_table(this_subset_mt))
-                print(f'Subset {str(subset_number)} already processed and imported with {str(mt_list_subsets[len(mt_list_subsets)-1].count_cols())} samples.')
-            else:
-                mt_list = []
-                idx = 0
-                for batch, base_level_coverage_metrics in subset:
-                    idx+=1
-                    mt = hl.import_matrix_table(
-                        'file://' + base_level_coverage_metrics,
-                        delimiter="\t",
-                        row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
-                        row_key=["chrom", "pos"],
-                        min_partitions=args.n_read_partitions,
-                    )
-                    if not keep_targets:
-                        mt = mt.drop("target")
-                    else:
-                        mt = mt.key_rows_by(*["chrom", "pos", "target"])
-                    mt = mt.key_cols_by().rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
-                    mt = mt.annotate_cols(batch = batch)
-
-                    mt_list.append(mt)
-                    if idx % 10 == 0:
-                        logger.info(f"Imported batch {str(idx)}, subset {str(subset_number)}...")
-
-                logger.info(f"Joining individual coverage mts for subset {str(subset_number)}...")
-                cov_mt_this = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=False, prefix=this_prefix)
-                cov_mt_this = cov_mt_this.repartition(args.n_final_partitions // num_merges).checkpoint(this_subset_mt, overwrite=True)
-                mt_list_subsets.append(cov_mt_this)
         merged_prefix = f'coverage_merging_final_{str(num_merges)}subsets/'
-        cov_mt = multi_way_union_mts(mt_list_subsets, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=False, prefix=merged_prefix)
-        cov_mt = cov_mt.repartition(args.n_final_partitions).checkpoint(merged_prefix + 'merged.mt', overwrite=True)
+        if hl.hdaoop_is_file(merged_prefix + 'merged.mt/_SUCCESS'):
+            cov_mt = hl.read_table(merged_prefix + 'merged.mt')
+        else:
+            subsets = chunks(pairs_for_coverage, len(pairs_for_coverage) // num_merges)
+            mt_list_subsets = []
+            for subset_number, subset in enumerate(subsets):
+                print(f'Importing subset {str(subset_number)}...')
+                this_prefix = f'coverage_merging_subset{str(subset_number)}_{str(num_merges)}subsets/'
+                this_subset_mt = os.path.join(temp_dir, f"{this_prefix}final_merged.mt")
+                if hl.hadoop_is_file(f'{this_subset_mt}/_SUCCESS'):
+                    mt_list_subsets.append(hl.read_matrix_table(this_subset_mt))
+                    print(f'Subset {str(subset_number)} already processed and imported with {str(mt_list_subsets[len(mt_list_subsets)-1].count_cols())} samples.')
+                else:
+                    mt_list = []
+                    idx = 0
+                    for batch, base_level_coverage_metrics in subset:
+                        idx+=1
+                        mt = hl.import_matrix_table(
+                            'file://' + base_level_coverage_metrics,
+                            delimiter="\t",
+                            row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
+                            row_key=["chrom", "pos"],
+                            min_partitions=args.n_read_partitions,
+                        )
+                        if not keep_targets:
+                            mt = mt.drop("target")
+                        else:
+                            mt = mt.key_rows_by(*["chrom", "pos", "target"])
+                        mt = mt.key_cols_by().rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
+                        mt = mt.annotate_cols(batch = batch)
+
+                        mt_list.append(mt)
+                        if idx % 10 == 0:
+                            logger.info(f"Imported batch {str(idx)}, subset {str(subset_number)}...")
+
+                    logger.info(f"Joining individual coverage mts for subset {str(subset_number)}...")
+                    cov_mt_this = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=False, prefix=this_prefix)
+                    cov_mt_this = cov_mt_this.repartition(args.n_final_partitions // num_merges).checkpoint(this_subset_mt, overwrite=True)
+                    mt_list_subsets.append(cov_mt_this)
+            cov_mt = multi_way_union_mts(mt_list_subsets, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=False, prefix=merged_prefix)
+            cov_mt = cov_mt.repartition(args.n_final_partitions).checkpoint(merged_prefix + 'merged.mt', overwrite=True)
     else:
         mt_list = []
         idx = 0
@@ -231,6 +234,7 @@ def main(args):  # noqa: D103
 
         logger.info("Joining individual coverage mts...")
         cov_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=check_from_disk, prefix='')
+    
     n_samples = cov_mt.count_cols()
 
     logger.info("Adding coverage annotations...")
