@@ -162,7 +162,7 @@ def main(args):  # noqa: D103
         merged_prefix = f'coverage_merging_final_{str(num_merges)}subsets/'
         this_merged_mt = os.path.join(temp_dir, f"{merged_prefix}final_merged.mt")
         if hl.hadoop_is_file(this_merged_mt + '/_SUCCESS'):
-            cov_mt = hl.read_table(merged_prefix + this_merged_mt)
+            cov_mt = hl.read_matrix_table(this_merged_mt)
         else:
             subsets = chunks(pairs_for_coverage, len(pairs_for_coverage) // num_merges)
             mt_list_subsets = []

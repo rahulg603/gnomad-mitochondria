@@ -164,7 +164,7 @@ def join_mitochondria_vcfs_into_mt(
     :param include_extra_v2_fields: Includes extra fields important for analysis of v2.1 source MTs
     :return: Joined MatrixTable of samples given in vcf_paths dictionary
     """
-    list_paths = list(zip(vcf_paths))
+    list_paths = list(vcf_paths.items())
     list_paths.sort(key=lambda y: y[0])
     if num_merges == 1:
         vcf_path_list = [list_paths]
