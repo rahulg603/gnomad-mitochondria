@@ -220,6 +220,7 @@ def join_mitochondria_vcfs_into_mt(
                     logger.info(f"Imported batch {str(idx)}...")
 
             combined_mt_this = multi_way_union_mts(mt_list, temp_dir, chunk_size, prefix=this_prefix)
+            combined_mt_this = combined_mt_this.repartition(args.n_final_partitions // num_merges).checkpoint(this_subset_mt, overwrite=True)
             mt_list_subsets.append(combined_mt_this)
     
     if num_merges == 1:
