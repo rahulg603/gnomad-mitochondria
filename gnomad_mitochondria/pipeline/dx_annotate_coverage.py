@@ -160,8 +160,9 @@ def main(args):  # noqa: D103
     if num_merges > 1:
         # check_from_disk is not compatible with multiple merges and will not be used
         merged_prefix = f'coverage_merging_final_{str(num_merges)}subsets/'
-        if hl.hdaoop_is_file(merged_prefix + 'merged.mt/_SUCCESS'):
-            cov_mt = hl.read_table(merged_prefix + 'merged.mt')
+        this_merged_mt = os.path.join(temp_dir, f"{merged_prefix}final_merged.mt")
+        if hl.hadoop_is_file(this_merged_mt + '/_SUCCESS'):
+            cov_mt = hl.read_table(merged_prefix + this_merged_mt)
         else:
             subsets = chunks(pairs_for_coverage, len(pairs_for_coverage) // num_merges)
             mt_list_subsets = []
@@ -200,7 +201,7 @@ def main(args):  # noqa: D103
                     cov_mt_this = cov_mt_this.repartition(args.n_final_partitions // num_merges).checkpoint(this_subset_mt, overwrite=True)
                     mt_list_subsets.append(cov_mt_this)
             cov_mt = multi_way_union_mts(mt_list_subsets, temp_dir, chunk_size, min_partitions=args.n_read_partitions, check_from_disk=False, prefix=merged_prefix)
-            cov_mt = cov_mt.repartition(args.n_final_partitions).checkpoint(merged_prefix + 'merged.mt', overwrite=True)
+            cov_mt = cov_mt.repartition(args.n_final_partitions).checkpoint(this_merged_mt, overwrite=True)
     else:
         mt_list = []
         idx = 0
