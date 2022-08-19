@@ -1,10 +1,10 @@
 #!/bin/bash
 
 #### PARAMETERS
-export numTest=50 # number of samples per iteration
-export numIter=20 # number of iterations
-export JOBLIMIT=1000 # how many jobs to allow simulataneously
-export outputFold=220722_test_runs_printreads_1000
+export numTest=10 # number of samples per iteration
+export numIter=200 # number of iterations
+export JOBLIMIT=2000 # how many jobs to allow simulataneously
+export outputFold=220818_test_scale_2000
 export PORTID=8094
 export USE_MEM=10
 export SQL_DB_NAME="local_cromwell_run.db" # name of local mySQL database

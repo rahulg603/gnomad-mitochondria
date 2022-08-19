@@ -31,11 +31,30 @@ def list_gcs_directories(client, bucket, prefix):
     return prefixes
 
 
-def test_success(bucket, path):
+def update_path_for_attempts(client, bucket, path, blobs):
+    # check for any folders labeled attempt
+    dirs = list_gcs_directories(client, bucket, path)
+    attempts = [os.path.basename(os.path.dirname(x)) for x in dirs if re.search('attempt-[0-9]{1,}$', os.path.basename(os.path.dirname(x)))]
+    
+    if len(attempts) > 0:
+        # if found, find the folder with the latest attempt
+        latest_attempt = max([int(re.search('attempt-([0-9]{1,})$',x).group(1)) for x in attempts])
+
+        # obtain a new path containing the latest attempt
+        path = path + 'attempt-' + str(latest_attempt) + '/'
+
+        # check for new blobs
+        blobs = list(bucket.list_blobs(prefix=path, delimiter='/'))
+    
+    return blobs, path, len(attempts) > 0
+
+
+def test_success(client, bucket, path):
     """
     A completed job has an RC file with code 0 and a finished log file.
     If RC is present and the log file has failed that will explain why.
     If RC is missing, then the job likely is in progress and we will allow multiple log blobs. We will still check for failure.
+    Added routine to check for preempted runs.
     """
     blobs = list(bucket.list_blobs(prefix=path, delimiter='/'))
     rc_found = 'rc' in [os.path.basename(x.name) for x in blobs]
@@ -43,7 +62,13 @@ def test_success(bucket, path):
         rc_blob = [x for x in blobs if os.path.basename(x.name) == 'rc'][0]
         rc_out = (rc_blob.download_as_string().decode('utf8').split('\n'))[0]
     else:
-        rc_out = 'NA'
+        blobs, path, tf_update = update_path_for_attempts(client, bucket, path, blobs)
+        if tf_update and ('rc' in [os.path.basename(x.name) for x in blobs]):
+            rc_found = True
+            rc_blob = [x for x in blobs if os.path.basename(x.name) == 'rc'][0]
+            rc_out = (rc_blob.download_as_string().decode('utf8').split('\n'))[0]
+        else:
+            rc_out = 'NA'
 
     log_blobs = [(x, x.name) for x in bucket.list_blobs(prefix=path, delimiter='/') if re.search('.log$', os.path.basename(x.name))]
     if rc_found and (len(log_blobs) != 1):
@@ -90,7 +115,7 @@ def process_single_run(storage_client, bucket, this_folder, run_folder, success_
         merge_items = 0
     else:
         merge_not_run = False
-        merge_res, merge_items, merge_log, _ = test_success(bucket, run_prefix + 'call-MergeMitoMultiSampleOutputsInternal/')
+        merge_res, merge_items, merge_log, _ = test_success(storage_client, bucket, run_prefix + 'call-MergeMitoMultiSampleOutputsInternal/')
 
     if success_only:
         shards = [None]
@@ -155,10 +180,10 @@ def obtain_latest_shard_run(storage_client, bucket, shards):
             subtasks_paths = list(list_gcs_directories(storage_client, bucket, subpaths_subtask[0]))
             subtasks = {os.path.basename(os.path.dirname(x)):x for x in subtasks_paths}
             subtask_latest_run = this_ordering[max([this_order_mapping[spec_task] for spec_task, _ in subtasks.items()])]
-            dct_success_test.update({shard_id: {subtask_latest_run: test_success(bucket, subpaths_subtask[0] + subtask_latest_run + '/')}})
+            dct_success_test.update({shard_id: {subtask_latest_run: test_success(storage_client, bucket, subpaths_subtask[0] + subtask_latest_run + '/')}})
 
         else:
-            dct_success_test.update({shard_id: {latest_task: test_success(bucket, prefixes2[shard_id] + latest_task + '/')}})
+            dct_success_test.update({shard_id: {latest_task: test_success(storage_client, bucket, prefixes2[shard_id] + latest_task + '/')}})
     
     return dct_success_test
 
@@ -236,6 +261,7 @@ def print_log(success_only):
     print('')
     print('HACKY CROMWELL VISUALIZER')
     print('July 6th 2022, Rahul Gupta')
+    print('Updated August 18th 2022')
     
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
@@ -275,6 +301,10 @@ if __name__ == '__main__':
         subfolders_to_test = [args.subfolder]
 
     if args.check_success:
+        for suffix in ['success', 'failure', 'running', 'stalled']:
+            if os.path.exists(f'{args.output}.{suffix}.tsv'):
+                os.remove(f'{args.output}.{suffix}.tsv')
+
         res = [check_success_single(storage_client, bucket, x, args.run_folder, args.success_only) for x in subfolders_to_test]
         print(f'Of {str(len(res))} runs, {str(sum([success for _, success in res]))} are finished.')
         if sum([success for _, success in res]) > 0:
