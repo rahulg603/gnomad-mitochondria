@@ -1,8 +1,11 @@
+# see QC field explanations here:
+# https://aousupporthelp.zendesk.com/hc/en-us/articles/4614687617556-How-the-All-of-Us-Genomic-data-are-organized
+
 import hail as hl
 import pandas as pd
 import argparse
 import multiprocessing
-import re
+import re, os
 
 
 def reader(args):
@@ -39,15 +42,11 @@ def import_and_cat_tables(directory_df, id_col, path_col, new_id_col, max_thread
     return concatenated_df.reset_index(drop=True)
 
 
-def subset_to_data_objects(lst, suffix):
-    return [x for x in lst if re.search(suffix, x)]
-
-
-def main(pipeline_output_file, qc_stats_path, file_paths_table_output, 
+def main(pipeline_output_path, qc_stats_path, file_paths_table_output, 
          per_sample_stats_output, file_paths_table_flat_output, per_sample_stats_flat_output):
 
     # import pipeline output file
-    pipeline_output_file = pd.read_csv(pipeline_output_file, sep='\t')
+    pipeline_output_file = pd.read_csv(pipeline_output_path, sep='\t')
     pipeline_output_file = pipeline_output_file.rename({'merged_calls': 'vcf', 
                                                         'merged_coverage':'coverage', 
                                                         'merged_statistics': 'stats', 
@@ -60,18 +59,34 @@ def main(pipeline_output_file, qc_stats_path, file_paths_table_output,
                                 'verify_bam_id2_contamination': 'freemix_percentage',
                                 'mean_coverage': 'nuc_mean_coverage'}, axis=1)
     
-    # checks on imported pipeline
+    # checks on imported pipeline results
     print('Running checks...')
     batches = list(pipeline_output_file.batch)
     if len(set(batches)) != len(batches):
         raise ValueError('ERROR: there are duplicate batches.')
+    basename_log = [os.path.dirname(x) for x in pipeline_output_file.merging_log]
+    basename_vcf = [os.path.dirname(x) for x in pipeline_output_file.vcf]
+    basename_cov = [os.path.dirname(x) for x in pipeline_output_file.coverage]
+    basename_stats = [os.path.dirname(x) for x in pipeline_output_file.stats]
+    if not all([(a == b) and (a == c) and (a == d) for a,b,c,d in zip(basename_log, basename_vcf, basename_cov, basename_stats)]):
+        raise ValueError('ERROR: all files should have the same path within a batch.')
+    if not all([re.search(search, x) for x, search in zip(basename_vcf, pipeline_output_file.batch)]):
+        raise ValueError('ERROR: all files should have paths matching the batch.')
 
     # import stats and qc and merge all into table
     print('Importing run statistics...')
     stats_table = import_and_cat_tables(pipeline_output_file, 'batch', 'stats', 'batch', enforce_nonmiss=False)
 
+    print('Running checks on run statistics...')
+    samples = list(stats_table.s)
+    if len(set(samples)) != len(samples):
+        raise ValueError('ERROR: there are duplicate samples.')
+
     # join with qc stats
     final_stats_table = stats_table.merge(qc_stats, how='left', on='s')
+    samples2 = list(final_stats_table.s)
+    if len(set(samples2)) != len(samples2):
+        raise ValueError('ERROR: there are duplicate samples in the merged stats / QC table.')
 
     # output
     print('Outputting flat files...')
@@ -88,7 +103,7 @@ def main(pipeline_output_file, qc_stats_path, file_paths_table_output,
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--pipeline-output-file', type=str, required=True, 
+parser.add_argument('--pipeline-output-path', type=str, required=True, 
                     help="This should come from cromwell_run_monitor.py, which outputs a list of successfully analyzed batches.")
 parser.add_argument('--file-paths-table-output', type=str, required=True, 
                     help="gs:// path to ht to output which will contain all paths for coverages and vcfs.")
@@ -104,7 +119,7 @@ parser.add_argument('--qc-stats-path', type=str, default='gs://fc-aou-datasets-c
 
 
 # defaults for debugging
-pipeline_output_file = 'gs://fc-secure-65229b17-5f6d-4315-9519-f53618eeee91/220717_test_runs_120_take2/success.tsv'
+pipeline_output_path = 'gs://fc-secure-65229b17-5f6d-4315-9519-f53618eeee91/220717_test_runs_120_take2/success.tsv'
 qc_stats_path = 'gs://fc-aou-datasets-controlled/v6/wgs/vcf/aux/qc/genomic_metrics.tsv'
 file_paths_table_output = 'gs://fc-secure-65229b17-5f6d-4315-9519-f53618eeee91/ht/test/tab_batch_file_paths.ht'
 per_sample_stats_output = 'gs://fc-secure-65229b17-5f6d-4315-9519-f53618eeee91/ht/test/tab_per_sample_stats.ht'

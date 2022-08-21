@@ -1,10 +1,10 @@
 #!/bin/bash
 
 #### PARAMETERS
-export numTest=10 # number of samples per iteration
-export numIter=200 # number of iterations
-export JOBLIMIT=2000 # how many jobs to allow simulataneously
-export outputFold=220818_test_scale_2000
+export numTest=50 # number of samples per iteration
+export numIter=2 # number of iterations
+export JOBLIMIT=100 # how many jobs to allow simulataneously
+export outputFold=220821_small_test_sample_mapping
 export PORTID=8094
 export USE_MEM=10
 export SQL_DB_NAME="local_cromwell_run.db" # name of local mySQL database
@@ -258,7 +258,7 @@ echo "Use compile_paths.sh to do this, which will both merge files from this run
 echo '#!/bin/bash' > compile_paths.sh
 export tsvPREF="${WORKSPACE_BUCKET}/tsv/${outputFold}"
 export htPREF="${WORKSPACE_BUCKET}/ht/${outputFold}"
-echo "gsutil cp ${success_file_pref}'*' ${tsvPREF}" >> compile_paths.sh
-echo "python gnomad-mitochondria/gnomad_mitochondria/pipeline/aou_collate_tables.py --pipeline-output-file ${success_file_pref}.success.tsv --file-paths-table-flat-output ${tsvPREF}/tab_batch_file_paths.tsv --per-sample-stats-flat-output ${tsvPREF}/tab_per_sample_stats.tsv --file-paths-table-output ${htPREF}/tab_batch_file_paths.ht --per-sample-stats-output ${htPREF}/tab_per_sample_stats.ht" >> compile_paths.sh
+echo "gsutil cp ${success_file_pref}'*' ${tsvPREF}/" >> compile_paths.sh
+echo "python gnomad-mitochondria/gnomad_mitochondria/pipeline/aou_collate_tables.py --pipeline-output-path ${success_file_pref}.success.tsv --file-paths-table-flat-output ${tsvPREF}/tab_batch_file_paths.tsv --per-sample-stats-flat-output ${tsvPREF}/tab_per_sample_stats.tsv --file-paths-table-output ${htPREF}/tab_batch_file_paths.ht --per-sample-stats-output ${htPREF}/tab_per_sample_stats.ht" >> compile_paths.sh
 echo "python gnomad-mitochondria/gnomad_mitochondria/pipeline/aou_update_sample_database.py --new-paths tsv/${outputFold}/tab_batch_file_paths.tsv --new-stats tsv/${outputFold}/tab_per_sample_stats.tsv --new-failures ${success_file_pref}.failure.tsv" >> compile_paths.sh
 echo "" >> compile_paths.sh

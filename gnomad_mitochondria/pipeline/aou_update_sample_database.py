@@ -11,6 +11,17 @@ def check_table(df, subj_col):
         raise ValueError('ERROR: dataframe cannot have duplicates.')
 
 
+def read_existing_database(path, new_suff):
+    """ Imports existing database (tsv) and produces backup.
+    """
+    df = pd.read_csv(path, sep='\t')
+    this_path_spl = os.path.splitext(path)
+    new_path = this_path_spl[0] + new_suff + this_path_spl[1]
+    print(f'Backing up {path} -> {new_path}...')
+    df.to_csv(new_path, sep='\t', index=False)
+    return df
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--database-stats', type=str, default="mt_pipeline_single_2_5_stats.tsv",
                     help="Name of file containing all completed sample-level statistics. If doesn't exist, will create newly.")
@@ -35,12 +46,11 @@ if __name__ == "__main__":
     df_stats = pd.read_csv(f"gs://{bucket_name}/{args.new_stats}", sep='\t')
     check_table(df_stats, 's')
     if storage.Blob(bucket=bucket, name=args.database_stats).exists(storage_client):
-        df_stats_exist = pd.read_csv(f"gs://{bucket_name}/{args.database_stats}", sep='\t')
-        this_path_spl = os.path.splitext(f"gs://{bucket_name}/{args.database_stats}")
-        df_stats_exist.to_csv(this_path_spl[0] + new_suff + this_path_spl[1], sep='\t', index=False)
-        
-        df_out = pd.concat([df_stats_exist, df_stats], axis=0)
+        df_stats_exist = read_existing_database(f"gs://{bucket_name}/{args.database_stats}", new_suff)
+        df_out = pd.concat([df_stats_exist, df_stats], axis=0, ignore_index=True)
         print(f'Adding {str(df_stats.shape[0])} records to existing stats table. New total is {str(df_out.shape[0])}.')
+        if (df_stats_exist.shape[0] + df_stats.shape[0]) != df_out.shape[0]:
+            raise ValueError('ERROR: the number of records in the final stats database are not as expected.')
         check_table(df_out, 's')
         df_out.to_csv(f"gs://{bucket_name}/{args.database_stats}", sep='\t', index=False)
     else:
@@ -51,12 +61,11 @@ if __name__ == "__main__":
     df_paths = pd.read_csv(f"gs://{bucket_name}/{args.new_paths}", sep='\t')
     check_table(df_paths, 'batch')
     if storage.Blob(bucket=bucket, name=args.database_paths).exists(storage_client):
-        df_paths_exist = pd.read_csv(f"gs://{bucket_name}/{args.database_paths}", sep='\t')
-        this_path_spl = os.path.splitext(f"gs://{bucket_name}/{args.database_paths}")
-        df_paths_exist.to_csv(this_path_spl[0] + new_suff + this_path_spl[1], sep='\t', index=False)
-        
-        df_out_paths = pd.concat([df_paths_exist, df_paths], axis=0)
+        df_paths_exist = read_existing_database(f"gs://{bucket_name}/{args.database_paths}", new_suff)
+        df_out_paths = pd.concat([df_paths_exist, df_paths], axis=0, ignore_index=True)
         print(f'Adding {str(df_paths.shape[0])} records to existing paths table. New total is {str(df_out_paths.shape[0])}.')
+        if (df_paths_exist.shape[0] + df_paths.shape[0]) != df_out_paths.shape[0]:
+            raise ValueError('ERROR: the number of records in the final paths database are not as expected.')
         check_table(df_out_paths, 'batch')
         df_out_paths.to_csv(f"gs://{bucket_name}/{args.database_paths}", sep='\t', index=False)
     else:
@@ -83,9 +92,7 @@ if __name__ == "__main__":
         df_new_fail = None
     
     if storage.Blob(bucket=bucket, name=args.database_failures).exists(storage_client):
-        df_fail_exist = pd.read_csv(f"gs://{bucket_name}/{args.database_failures}", sep='\t')
-        this_path_spl = os.path.splitext(f"gs://{bucket_name}/{args.database_failures}")
-        df_fail_exist.to_csv(this_path_spl[0] + new_suff + this_path_spl[1], sep='\t', index=False)
+        df_fail_exist = read_existing_database(f"gs://{bucket_name}/{args.database_failures}", new_suff)
         orig_fail_size = df_fail_exist.shape[0]
         print(f'Failed sample database with {str(orig_fail_size)} samples loaded.')
         
@@ -93,7 +100,7 @@ if __name__ == "__main__":
         df_fail_exist = df_fail_exist[~df_fail_exist['s'].isin(df_stats['s'])]
         newly_success_rm_size = df_fail_exist.shape[0]
         if orig_fail_size > newly_success_rm_size:
-            print(f'{str(newly_success_rm_size)} new completed samples previously failed, and have bene removed from failure database.')
+            print(f'{str(newly_success_rm_size)} new completed samples previously failed, and have been removed from failure database.')
         elif orig_fail_size < newly_success_rm_size:
             raise ValueError('ERROR: new samples added to failure table somehow despite filtering out samples newly completed.')
         
@@ -101,7 +108,7 @@ if __name__ == "__main__":
             # if there are new failures that are also old failures, delete the old versions
             df_fail_exist = df_fail_exist[~df_fail_exist['s'].isin(df_new_fail['s'])]
             if newly_success_rm_size > df_fail_exist.shape[0]:
-                print(f'{str(df_fail_exist.shape[0])} newly failed samples previously failed, and have bene removed from old failure database.')
+                print(f'{str(df_fail_exist.shape[0])} newly failed samples previously failed, and have been removed from old failure database.')
             elif newly_success_rm_size < df_fail_exist.shape[0]:
                 raise ValueError('ERROR: new samples added to failure table somehow despite filtering out samples newly failed.')
     else:
@@ -113,6 +120,8 @@ if __name__ == "__main__":
     else:
         if df_fail_exist is not None and df_new_fail is not None:
             df_fail = pd.concat([df_fail_exist, df_new_fail], axis=0)
+            if (df_fail_exist.shape[0] + df_new_fail.shape[0]) != df_fail.shape[0]:
+                raise ValueError('ERROR: the number of records in the final failure database are not as expected.')
         elif df_fail_exist is not None:
             df_fail = df_fail_exist
         elif df_new_fail is not None:

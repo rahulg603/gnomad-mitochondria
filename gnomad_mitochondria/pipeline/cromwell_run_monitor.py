@@ -196,7 +196,7 @@ def check_success_single(storage_client, bucket, this_folder, run_folder, succes
         df = process_merging_run(bucket, this_folder, merge_items, merge_log)
     elif (not merge_not_run) and (merge_res == 'FAIL'):
         failed = True
-        df = pd.DataFrame({'shard': ['NA'], 'task_failed': ['call-MergeMitoMultiSampleOutputsInternal'], 'status': ['FAIL'], 'log_file': [merge_log]})
+        df = pd.DataFrame({'shard': ['NA'], 'latest_task': ['call-MergeMitoMultiSampleOutputsInternal'], 'status': ['FAIL'], 'log_file': [merge_log]})
     elif (not merge_not_run) and (merge_res == 'IN PROGRESS'):
         failed = True
         df = pd.DataFrame({'shard': ['NA'], 'latest_task': ['call-MergeMitoMultiSampleOutputsInternal'], 'status': ['IN PROGRESS'], 'log_file': [merge_log]})
@@ -227,7 +227,7 @@ def check_success_single(storage_client, bucket, this_folder, run_folder, succes
             df_pass = pd.DataFrame({'shard': [x for x, _, _, _ in passes], 'latest_task': [x for _, x, _, _ in passes], 
                                     'log_file': [x for _, _, x, _ in passes], 'status': ['PASS' for _ in passes], 
                                     'return_code': [x for _, _, _, x in passes]})
-            df = pd.concat([df_prog, df_fail, df_pass]).reset_index(drop=True)
+            df = pd.concat([df_prog, df_fail, df_pass], axis=0).reset_index(drop=True)
     
     df['subpath_id'] = this_folder
     return df, not failed
@@ -300,6 +300,9 @@ if __name__ == '__main__':
     else:
         subfolders_to_test = [args.subfolder]
 
+    df_sample = produce_sample_lists(args.sub_ids, args.sample_lists)
+    df_sample.to_csv(f'{args.output}.sample_mapping.tsv', sep='\t', index=False)
+    
     if args.check_success:
         for suffix in ['success', 'failure', 'running', 'stalled']:
             if os.path.exists(f'{args.output}.{suffix}.tsv'):
@@ -311,19 +314,18 @@ if __name__ == '__main__':
             for batch, this_res in zip(subfolders_to_test, res):
                 if this_res[1]:
                     print(batch)
-            df_success = pd.concat([tb for tb, success in res if success])
+            df_success = pd.concat([tb for tb, success in res if success], axis=0)
             df_success.to_csv(f'{args.output}.success.tsv', sep='\t', index=False)
 
         if sum([not success for _, success in res]) > 0:
             print(f'{str(sum([not success for _, success in res]))} are incomplete.')
             if not args.success_only:
-                df_incomplete = pd.concat([tb for tb, success in res if not success])
+                df_incomplete = pd.concat([tb for tb, success in res if not success], axis=0)
                 if sum([not success for _, success in res]) > 0:
                     print('The current status of ongoing batches is as follows:')
                     running_batches = [(batch, this_res) for batch, (this_res, success) in zip(subfolders_to_test, res) if not success]
                     print(df_incomplete.groupby(['subpath_id','status'])['shard'].count().to_string())
 
-                    df_sample = produce_sample_lists(args.sub_ids, args.sample_lists)
                     df_fail = df_incomplete[df_incomplete.status == 'FAIL']
                     df_fail = df_fail.merge(df_sample, left_on=['subpath_id', 'shard'], right_on=['batch', 'shard'], how='left')
                     df_fail.to_csv(f'{args.output}.failure.tsv', sep='\t', index=False)
