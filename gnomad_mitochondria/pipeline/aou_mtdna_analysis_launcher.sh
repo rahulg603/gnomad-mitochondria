@@ -1,10 +1,10 @@
 #!/bin/bash
 
 #### PARAMETERS
-export numTest=50 # number of samples per iteration
-export numIter=2 # number of iterations
-export JOBLIMIT=100 # how many jobs to allow simulataneously
-export outputFold=220821_small_test_sample_mapping
+export numTest=35 # number of samples per iteration
+export numIter=80 # number of iterations
+export JOBLIMIT=5000 # how many jobs to allow simulataneously
+export outputFold=220824_2800_4
 export PORTID=8094
 export USE_MEM=10
 export SQL_DB_NAME="local_cromwell_run.db" # name of local mySQL database
@@ -108,7 +108,8 @@ wdl_filename = "scatterWrapper_MitoPipeline_v2_5.wdl"
 json_filename = "input_allofus.json"
 
 # create options file
-options_content = f'{{\n  "jes_gcs_root": "{output_bucket}",\n  "workflow_failure_mode": "NoNewCalls"\n}}\n'
+# options_content = f'{{\n  "jes_gcs_root": "{output_bucket}",\n  "workflow_failure_mode": "NoNewCalls"\n}}\n'
+options_content = f'{{\n  "jes_gcs_root": "{output_bucket}"\n}}\n'
 
 fp = open(options_filename, 'w')
 fp.write(options_content)
