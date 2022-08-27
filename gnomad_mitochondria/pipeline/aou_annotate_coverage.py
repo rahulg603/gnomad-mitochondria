@@ -125,7 +125,7 @@ def chunks(items, binsize):
 
 
 def main(args):  # noqa: D103
-    input_ht = f'gs://{args.input_ht}'
+    input_tsv = f'gs://{args.input_tsv}'
     output_ht = f'gs://{args.output_ht}'
     temp_dir = f'gs://{args.temp_dir}/'
     chunk_size = args.chunk_size
@@ -148,7 +148,7 @@ def main(args):  # noqa: D103
     logger.info(
         "Reading in individual coverage files as matrix tables and adding to a list of matrix tables..."
     )
-    paths = hl.read_table(input_ht)
+    paths = hl.import_table(input_tsv)
     pairs_for_coverage = paths.annotate(pairs = (paths.batch, paths.coverage)).pairs.collect()
 
     if num_merges > 1:
@@ -268,8 +268,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-i",
-        "--input-ht",
-        help="Input ht with paths to coverage file.",
+        "--input-tsv",
+        help="Input tsv with paths to coverage file.",
         required=True,
     )
     parser.add_argument(
