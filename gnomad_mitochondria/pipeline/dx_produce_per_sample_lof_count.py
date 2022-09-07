@@ -14,7 +14,7 @@ FEATURE_FIELD_TO_TYPE = {"Transcript": ("transcript_consequences", "transcript_f
                          "MotifFeature": ("motif_feature_consequences", "motif_feature_id"),
                          "Intergenic": ("intergenic_consequences", "")}
 CHROM = [str(x) for x in range(1, 23)] + ['X', 'Y']
-LOF_CRITERIA = lambda x: (x.lof == 'HC') & hl.is_missing(x.lof_flags)
+LOF_CRITERIA = lambda x: (x.lof == 'HC') & (hl.len(x.lof_flags) == 0)
 
 # see Loftee docs here for information on where these came from: 
 # https://github.com/broadinstitute/gnomad-browser/blob/main/browser/src/VariantPage/Loftee.tsx
@@ -149,7 +149,7 @@ def generate_lof_mt(args, data_path, mid_str, batch_pref, checkpoint_mt_path, te
     mt_csq = mt_csq.annotate_rows(worst_csq_gene = mt_csq.vep.worst_csq_by_gene_canonical
                   ).explode_rows('worst_csq_gene')
     if not apply_filters_after:
-        mt_csq_lof = mt_csq.filter_rows(LOF_CRITERIA(mt_csq_lof.worst_csq_gene))
+        mt_csq_lof = mt_csq.filter_rows(LOF_CRITERIA(mt_csq.worst_csq_gene))
     else:
         mt_csq_lof = mt_csq.filter_rows(hl.literal(vep.LOF_CSQ_SET).contains(mt_csq.worst_csq_gene.most_severe_consequence))
     
