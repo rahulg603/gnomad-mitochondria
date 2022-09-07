@@ -220,6 +220,7 @@ if __name__ == '__main__':
         checkpoint_mt_path = f'dnax://{my_database}/{args.export_prefix}_worstcsqlof_filtered_{mid_str}{batch_pref_this}.mt'
         if not args.assume_all_files_exist:
             if (not args.overwrite_filtered_table) & hl.hadoop_is_file(f'{checkpoint_mt_path}/_SUCCESS'):
+                print(f'Loaded {mid_str} LoF table from disk.')
                 mt_csq_lof = hl.read_matrix_table(checkpoint_mt_path)
             else:
                 mt_csq_lof = generate_lof_mt(args, data_path, mid_str, 
@@ -227,6 +228,7 @@ if __name__ == '__main__':
                                              args.apply_filters_post_checkpoint)
 
             if args.apply_filters_post_checkpoint:
+                print(f'Assuming {mid_str} LoF table needs further filtering post-checkpoint...')
                 mt_csq_lof = mt_csq_lof.filter_rows(hl.len(mt_csq_lof.filters) == 0).repartition(200)
                 mt_csq_lof = mt_csq_lof.filter_rows(LOF_CRITERIA(mt_csq_lof.worst_csq_gene))
             mts_csq_lof.append(mt_csq_lof)
@@ -237,6 +239,7 @@ if __name__ == '__main__':
             per_gene_group = hl.read_matrix_table(per_gene_mt_path)
         else:
             if (not tf_overwrite_next) & hl.hadoop_is_file(f'{per_gene_mt_path}/_SUCCESS'):
+                print(f'Loaded {mid_str} per-gene LoF counts table from disk.')
                 per_gene_group = hl.read_matrix_table(per_gene_mt_path)
             else:
                 per_gene_group = mt_csq_lof.group_rows_by(mt_csq_lof.worst_csq_gene.gene_symbol
@@ -251,12 +254,14 @@ if __name__ == '__main__':
             # Produce summary data
             flat_file_summ_path = f'dnax://{my_database}/{args.export_prefix}_worstcsqlof_filtered_pergene_summarystats_{mid_str}{batch_pref_this}.tsv.bgz'
             if tf_overwrite_next or (not hl.hadoop_is_file(flat_file_summ_path)):
+                print(f'Generating {mid_str} per-gene LoF summaries...')
                 ht = generate_gene_lof_summary(per_gene_group)
                 ht.export(flat_file_summ_path)
             
             # Subset to 0, 1, 2 for a given gene
             flat_file_tsv_path = f'dnax://{my_database}/{args.export_prefix}_worstcsqlof_filtered_pergene_gt_{mid_str}{batch_pref_this}.tsv.bgz'
             if tf_overwrite_next or (not hl.hadoop_is_file(flat_file_tsv_path)):
+                print(f'Generating {mid_str} per-gene LoF counts...')
                 per_gene_lofgt = per_gene_group.select_entries(GT_LOF = hl.case(
                                                                         ).when(per_gene_group.num_hom_alt > 0, 2
                                                                         ).when(per_gene_group.num_het > 0, 1
@@ -286,6 +291,9 @@ if __name__ == '__main__':
             mts_per_gene_f.append(this_mt.filter_cols(hl.literal(vec_shared_fin).contains(this_mt.col_id)))
         full_mt_per_gene_group = hl.MatrixTable.union_rows(*mts_per_gene
                                               ).checkpoint(f'dnax://{my_database}/{args.export_prefix}_worstcsqlof_filtered_pergene_allchr{batch_pref_this}.mt', overwrite=True)
+
+        full_ht = generate_gene_lof_summary(full_mt_per_gene_group)
+        full_ht.export(f'dnax://{my_database}/{args.export_prefix}_worstcsqlof_filtered_pergene_summarystats_allchr{batch_pref_this}.tsv.bgz')
 
         full_per_gene_lofgt = full_mt_per_gene_group.select_entries(GT_LOF = hl.case(
                                                                               ).when(full_mt_per_gene_group.num_hom_alt > 0, 2
