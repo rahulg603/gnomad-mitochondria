@@ -220,8 +220,8 @@ if __name__ == '__main__':
         checkpoint_mt_path = f'dnax://{my_database}/{args.export_prefix}_worstcsqlof_filtered_{mid_str}{batch_pref_this}.mt'
         if not args.assume_all_files_exist:
             if (not args.overwrite_filtered_table) & hl.hadoop_is_file(f'{checkpoint_mt_path}/_SUCCESS'):
-                print(f'Loaded {mid_str} LoF table from disk.')
                 mt_csq_lof = hl.read_matrix_table(checkpoint_mt_path)
+                print(f'Loaded {mid_str} LoF table from disk.')
             else:
                 mt_csq_lof = generate_lof_mt(args, data_path, mid_str, 
                                              batch_pref, checkpoint_mt_path, temp_dir,
@@ -269,11 +269,14 @@ if __name__ == '__main__':
                 per_gene_lofgt.GT_LOF.export(flat_file_tsv_path)
 
     if len(args.specific_chr) == 0:
+        print("Per chromosome sample sizes (should be equal):")
+        print({'chr'+str(idx):len(x) for idx, x in enumerate(s_list)})
         vec_shared = s_list[0]
         if len(CHROM_VEC) > 1:
             for idx, chr in enumerate(CHROM_VEC[1:]):
                 vec_shared = [vec_shared[x] if vec_shared[x] == s_list[idx+1][x] else 'RG_INCORRECT_FOR_RM' for x in range(0, len(vec_shared))]
         vec_shared_fin = [x for x in vec_shared if x != 'RG_INCORRECT_FOR_RM']
+        print(f'Filtered sample vector from {str(len(vec_shared))} to {str(len(vec_shared_fin))}.')
 
         final_mt_path = f'dnax://{my_database}/{args.export_prefix}_worstcsqlof_filtered_allchr{batch_pref_this}.mt'
         
@@ -281,15 +284,15 @@ if __name__ == '__main__':
             mts_csq_lof_f = []
             for idx, chr in enumerate(CHROM_VEC):
                 this_mt = mts_csq_lof[idx]
-                mts_csq_lof_f.append(this_mt.filter_cols(hl.literal(vec_shared_fin).contains(this_mt.col_id)))
+                mts_csq_lof_f.append(this_mt.filter_cols(hl.literal(vec_shared_fin).contains(this_mt.s)))
             full_mt_csq_lof = hl.MatrixTable.union_rows(*mts_csq_lof_f).repartition()
             full_mt_csq_lof.write(final_mt_path, overwrite=True)
         
         mts_per_gene_f = []
         for idx, chr in enumerate(CHROM_VEC):
             this_mt = mts_per_gene[idx]
-            mts_per_gene_f.append(this_mt.filter_cols(hl.literal(vec_shared_fin).contains(this_mt.col_id)))
-        full_mt_per_gene_group = hl.MatrixTable.union_rows(*mts_per_gene
+            mts_per_gene_f.append(this_mt.filter_cols(hl.literal(vec_shared_fin).contains(this_mt.s)))
+        full_mt_per_gene_group = hl.MatrixTable.union_rows(*mts_per_gene_f
                                               ).checkpoint(f'dnax://{my_database}/{args.export_prefix}_worstcsqlof_filtered_pergene_allchr{batch_pref_this}.mt', overwrite=True)
 
         full_ht = generate_gene_lof_summary(full_mt_per_gene_group)
