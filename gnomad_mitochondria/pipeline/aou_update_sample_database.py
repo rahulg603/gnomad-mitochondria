@@ -81,12 +81,16 @@ if __name__ == "__main__":
     print('Processing failures...')
     if storage.Blob(bucket=bucket, name=args.new_failures).exists(storage_client):
         df_new_fail = pd.read_csv(f"gs://{bucket_name}/{args.new_failures}", sep='\t')
-        check_table(df_new_fail, 's')
-        print(f'New failure file loaded. {str(df_new_fail.shape[0])} samples newly failed.')
+        if df_new_fail.shape[0] == 0:
+            print(f'No new samples failed.')
+            df_new_fail = None
+        else:
+            check_table(df_new_fail, 's')
+            print(f'New failure file loaded. {str(df_new_fail.shape[0])} samples newly failed.')
 
-        # if there is a new success that is a new failure, throw an error
-        if any(df_stats.s.isin(df_new_fail.s)):
-            raise ValueError('ERROR: there should not be any successful samples that also listed as failures.')
+            # if there is a new success that is a new failure, throw an error
+            if any(df_stats.s.isin(df_new_fail.s)):
+                raise ValueError('ERROR: there should not be any successful samples that also listed as failures.')
     else:
         print(f'No new samples failed.')
         df_new_fail = None

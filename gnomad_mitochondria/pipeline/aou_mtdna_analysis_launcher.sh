@@ -4,7 +4,7 @@
 export numTest=30 # number of samples per iteration
 export numIter=80 # number of iterations
 export JOBLIMIT=5000 # how many jobs to allow simulataneously
-export outputFold=220907_2400_15
+export outputFold=220907_2400_16
 export PORTID=8094
 export USE_MEM=10
 export SQL_DB_NAME="local_cromwell_run.db" # name of local mySQL database
@@ -261,5 +261,5 @@ export tsvPREF="${WORKSPACE_BUCKET}/tsv/${outputFold}"
 export htPREF="${WORKSPACE_BUCKET}/ht/${outputFold}"
 echo "gsutil cp ${success_file_pref}'*' ${tsvPREF}/" >> compile_paths.sh
 echo "python gnomad-mitochondria/gnomad_mitochondria/pipeline/aou_collate_tables.py --pipeline-output-path ${success_file_pref}.success.tsv --file-paths-table-flat-output ${tsvPREF}/tab_batch_file_paths.tsv --per-sample-stats-flat-output ${tsvPREF}/tab_per_sample_stats.tsv --file-paths-table-output ${htPREF}/tab_batch_file_paths.ht --per-sample-stats-output ${htPREF}/tab_per_sample_stats.ht" >> compile_paths.sh
-echo "python gnomad-mitochondria/gnomad_mitochondria/pipeline/aou_update_sample_database.py --new-paths tsv/${outputFold}/tab_batch_file_paths.tsv --new-stats tsv/${outputFold}/tab_per_sample_stats.tsv --new-failures ${success_file_pref}.failure.tsv" >> compile_paths.sh
+echo "python gnomad-mitochondria/gnomad_mitochondria/pipeline/aou_update_sample_database.py --new-paths tsv/${outputFold}/tab_batch_file_paths.tsv --new-stats tsv/${outputFold}/tab_per_sample_stats.tsv --new-failures tsv/${outputFold}/${success_file_pref}.failure.tsv" >> compile_paths.sh
 echo "" >> compile_paths.sh
