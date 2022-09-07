@@ -178,6 +178,21 @@ def generate_gene_lof_summary(mt):
     return ht.annotate(oe=ht.obs_hom_lof / ht.exp_hom_lof)
 
 
+def chunks(lst, n):
+    """Yield successive n-sized chunks from lst."""
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
+
+
+def chunk_vector(vec, chunk_size):
+    thislen = len(vec)
+    if thislen <= chunk_size:
+        return [vec], [str(0)]
+    else:
+        vec_out = list(chunks(vec, chunk_size))
+        return vec_out, [str(x) for x in range(0, len(vec_out))]
+
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--use-default-exomes', help='If enabled, will import UKB processed 450k exomes. If not enabled, will import gnomAD exomes.',
                     action='store_true')
@@ -194,6 +209,7 @@ parser.add_argument('--fix-fields-using-internal-method', help='If enabled, will
 parser.add_argument('--assume-all-files-exist', action='store_true', help='If enabled, will assume MTs all exist.')
 parser.add_argument('--apply-filters-post-checkpoint', action='store_true', help='If enabled, will apply filters after checkpoint. Two filters are applied -- removal of anything with FT fields and filtering to LOFTEE interpreted LOF alleles. Enable this as a band-aid solution to avoid exporting all the exomes again but apply filters.')
 parser.add_argument('--avoid-generating-full-lof-table', action='store_true', help='If enabled, will skip generation of full LoF table. This amounts to a union of all credible LoFs.')
+parser.add_argument('--merging-chunk-size', type=int, default=3, help='Will use these chunk sizes to speed up merging.')
 
 
 if __name__ == '__main__':
@@ -292,7 +308,16 @@ if __name__ == '__main__':
         for idx, chr in enumerate(CHROM_VEC):
             this_mt = mts_per_gene[idx]
             mts_per_gene_f.append(this_mt.filter_cols(hl.literal(vec_shared_fin).contains(this_mt.s)))
-        full_mt_per_gene_group = hl.MatrixTable.union_rows(*mts_per_gene_f
+        
+        mts_per_gene_intermediate = []
+        chunked_mts, chunked_idx = chunk_vector(mts_per_gene_f, args.merging_chunk_size)
+        for mtchunk, idx in zip(chunked_mts, chunked_idx):
+            this_temp_path = f'{temp_dir}temp_chunked_per_gene_{idx}.mt'
+            this_mrg_per_gene = hl.MatrixTable.union_rows(*mtchunk
+                                             ).checkpoint(this_temp_path, overwrite=True)
+            mts_per_gene_intermediate.append(this_mrg_per_gene)
+        
+        full_mt_per_gene_group = hl.MatrixTable.union_rows(*mts_per_gene_intermediate
                                               ).checkpoint(f'dnax://{my_database}/{args.export_prefix}_worstcsqlof_filtered_pergene_allchr{batch_pref_this}.mt', overwrite=True)
 
         full_ht = generate_gene_lof_summary(full_mt_per_gene_group)
