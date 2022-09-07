@@ -58,7 +58,7 @@ def collect_vcf_paths(
     """
     vcf_paths = {}
     # Load in data
-    participant_ht = hl.read_table(participant_data)
+    participant_ht = hl.import_table(participant_data)
 
     # Remove participants that don't have VCF output
     participant_ht.filter(participant_ht[vcf_col_name] != "")
@@ -182,7 +182,7 @@ def join_mitochondria_vcfs_into_mt(
             for batch, vcf_path in subset:
                 idx+=1
                 try:
-                    mt = hl.import_vcf('file://' + vcf_path, reference_genome="GRCh38")
+                    mt = hl.import_vcf(vcf_path, reference_genome="GRCh38")
                 except Exception as e:
                     raise ValueError(
                         f"vcf path {vcf_path} does not exist for sample {batch}"
@@ -387,10 +387,10 @@ def chunks(items, binsize):
 
 def main(args):  # noqa: D103
     # start SQL session and initialize constants
-    participant_data = f'gs://{args.input_ht}'
-    coverage_mt_path = f'gs://{args.coverage_mt_path}/'
-    output_bucket = f'gs://{args.output_bucket}'
-    temp_dir = f'gs://{args.temp_dir}/'
+    participant_data = args.input_tsv
+    coverage_mt_path = args.coverage_mt_path
+    output_bucket = args.output_bucket
+    temp_dir = args.temp_dir
     participants_to_subset = None if args.participants_to_subset is None else f'gs://{args.participants_to_subset}'
     chunk_size = args.chunk_size
     artifact_prone_sites_path = args.artifact_prone_sites_path
@@ -466,8 +466,8 @@ if __name__ == "__main__":
     )
     p.add_argument(
         "-i",
-        "--input-ht",
-        help="Input ht with paths to vcf file.",
+        "--input-tsv",
+        help="Input tsv with paths to vcf file.",
         required=True,
     )
     p.add_argument(

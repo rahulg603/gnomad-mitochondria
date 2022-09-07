@@ -125,9 +125,9 @@ def chunks(items, binsize):
 
 
 def main(args):  # noqa: D103
-    input_tsv = f'gs://{args.input_tsv}'
-    output_ht = f'gs://{args.output_ht}'
-    temp_dir = f'gs://{args.temp_dir}/'
+    input_tsv = args.input_tsv
+    output_ht = args.output_ht
+    temp_dir = args.temp_dir
     chunk_size = args.chunk_size
     overwrite = args.overwrite
     keep_targets = args.keep_targets
@@ -173,7 +173,7 @@ def main(args):  # noqa: D103
                     for batch, base_level_coverage_metrics in subset:
                         idx+=1
                         mt = hl.import_matrix_table(
-                            'file://' + base_level_coverage_metrics,
+                            base_level_coverage_metrics,
                             delimiter="\t",
                             row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
                             row_key=["chrom", "pos"],
@@ -207,7 +207,7 @@ def main(args):  # noqa: D103
         for batch, base_level_coverage_metrics in pairs_for_coverage:
             idx+=1
             mt = hl.import_matrix_table(
-                'file://' + base_level_coverage_metrics,
+                base_level_coverage_metrics,
                 delimiter="\t",
                 row_fields={"chrom": hl.tstr, "pos": hl.tint, "target": hl.tstr},
                 row_key=["chrom", "pos"],

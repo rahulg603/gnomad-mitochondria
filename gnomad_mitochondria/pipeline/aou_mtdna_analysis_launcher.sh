@@ -4,7 +4,7 @@
 export numTest=30 # number of samples per iteration
 export numIter=80 # number of iterations
 export JOBLIMIT=5000 # how many jobs to allow simulataneously
-export outputFold=220826_2400_7
+export outputFold=220906_2400_14
 export PORTID=8094
 export USE_MEM=10
 export SQL_DB_NAME="local_cromwell_run.db" # name of local mySQL database
