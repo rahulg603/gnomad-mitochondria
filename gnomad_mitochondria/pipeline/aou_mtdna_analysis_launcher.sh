@@ -1,12 +1,12 @@
 #!/bin/bash
 
 #### PARAMETERS
-export numTest=30 # number of samples per iteration
-export numIter=80 # number of iterations
+export numTest=6 # number of samples per iteration
+export numIter=500 # number of iterations
 export JOBLIMIT=5000 # how many jobs to allow simulataneously
-export outputFold=220907_2400_16
+export outputFold=220911_3000_21
 export PORTID=8094
-export USE_MEM=10
+export USE_MEM=80
 export SQL_DB_NAME="local_cromwell_run.db" # name of local mySQL database
 export FORCEDOWNLOAD='False' # if enabled, will force download for CRAM via gsutil -u {} cp
 export RERUN_FAIL='False' # if enabled, will try to rerun failures. If disabled, will filter out failures.
@@ -122,11 +122,16 @@ with open('/home/jupyter/cromwell.conf', 'r') as f:
 include_str_repl = 'include required(classpath("application"))\n\n'
 input_conf_rm = input_conf.replace(include_str_repl, '')
 cromwell_config_file = ConfigFactory.parse_string(input_conf_rm)
+cromwell_config_file['system'] = ConfigTree({'new-workflow-poll-rate': 1,
+                                             'max-concurrent-workflows': joblimit,
+                                             'max-workflow-launch-count': 400})
 cromwell_config_file['backend']['providers']['PAPIv2-beta']['config']['concurrent-job-limit'] = joblimit
 cromwell_config_file['backend']['providers']['PAPIv2-beta']['config']['genomics']['enable-fuse'] = True
-cromwell_config_file['database'] = ConfigTree({'profile': "slick.jdbc.HsqldbProfile$", 
+cromwell_config_file['database'] = ConfigTree({'profile': "slick.jdbc.HsqldbProfile$",
+                                               'insert-batch-size': 6000,
                                                'db': ConfigTree({'driver':"org.hsqldb.jdbcDriver", 
-                                                                 'url':f'jdbc:hsqldb:file:{sql_db};shutdown=false;hsqldb.tx=mvcc', 'connectionTimeout': 3000})})
+                                                                 'url':f'jdbc:hsqldb:file:{sql_db};shutdown=false;hsqldb.default_table_type=cached;hsqldb.tx=mvcc;hsqldb.large_data=true;hsqldb.lob_compressed=true;hsqldb.script_format=3;hsqldb.result_max_memory_rows=20000',
+                                                                 'connectionTimeout': 300000})})
 with open('/home/jupyter/cromwell.new.conf', 'w') as f:
     f.write(include_str_repl + HOCONConverter.to_hocon(cromwell_config_file))
 

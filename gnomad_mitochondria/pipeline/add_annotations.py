@@ -32,12 +32,20 @@ from gnomad_mitochondria.pipeline.annotation_descriptions import (
 # Include NA in POPS to account for cases where population annotations are missing
 POPS.append("NA")
 
+RESOURCE_PATH = 'gcp-public-data--gnomad/resources/mitochondria'
 RESOURCES = {
-    "variant_context": "gs://gnomad-public-requester-pays/resources/mitochondria/variant_context/chrM_pos_ref_alt_context_categories.txt",
-    "phylotree": "gs://gnomad-public-requester-pays/resources/mitochondria/phylotree/rCRS-centered_phylo_vars_final_update.txt",
-    "pon_mt_trna": "gs://gnomad-public-requester-pays/resources/mitochondria/trna_predictions/pon_mt_trna_predictions_08_27_2020.txt",
-    "mitotip": "gs://gnomad-public-requester-pays/resources/mitochondria/trna_predictions/mitotip_scores_08_27_2020.txt",
+    "variant_context": f"gs://{RESOURCE_PATH}/variant_context/chrM_pos_ref_alt_context_categories.txt",
+    "phylotree": f"gs://{RESOURCE_PATH}/phylotree/rCRS-centered_phylo_vars_final_update.txt",
+    "pon_mt_trna": f"gs://{RESOURCE_PATH}/trna_predictions/pon_mt_trna_predictions_08_27_2020.txt",
+    "mitotip": f"gs://{RESOURCE_PATH}/trna_predictions/mitotip_scores_08_27_2020.txt",
 }
+
+LIFTOVERFILTERS = set(['NoTarget','MismatchedRefAllele','IndelStraddlesMultipleIntevals'])
+CUSTOMLIFTOVERFILTERS = set(['FailedPicardLiftoverVcf', 'InsertionSharesForceCalledDeletion', 'InsertionSharesForceCalledInsertion',
+                             'AddGRCh38RefDeleToRefSiteIns', 'ComplexSwapField', 'NewInsertionHaplotype',
+                             'SwapFirstAlleleIndel', 'ReplaceInternalBaseDeletion', 'FancyFieldInversion',
+                             'DeletionSpannedHomoplasmicInsertion', 'LiftoverSuccessEntrySwap', 'ForceCalledHomoplasmy',
+                             'LeftShiftedIndel', 'FailedDuplicateVariant'])
 
 
 logging.basicConfig(
@@ -52,6 +60,7 @@ if int(hl.version().split('-')[0].split('.')[2]) >= 75: # only use this if using
     # Setting this flag isn't generally recommended, but is needed (since at least Hail version 0.2.75) to avoid an array index out of bounds error until changes are made in future versions of Hail
     # TODO: reassess if this flag is still needed for future versions of Hail
     hl._set_flags(no_whole_stage_codegen="1")
+
 
 def add_genotype(mt_path: str, min_hom_threshold: float = 0.95) -> hl.MatrixTable:
     """
@@ -285,9 +294,10 @@ def filter_by_contamination(
     )
 
     # Add annotation to keep only samples with a contamination less than 2%
+    input_mt = input_mt.annotate_cols(freemix_percentage_imp = hl.if_else(hl.is_missing(input_mt.freemix_percentage), 0, input_mt.freemix_percentage))
     input_mt = input_mt.annotate_cols(
         keep=(input_mt.contamination < 0.02)
-        & (input_mt.freemix_percentage < 2)
+        & (input_mt.freemix_percentage_imp < 2)
         & (input_mt.contam_high_het < 0.02)
         & ~border_samples.contains(input_mt.s)
     )
@@ -686,7 +696,7 @@ def add_quality_histograms(input_mt: hl.MatrixTable) -> hl.MatrixTable:
     return input_mt
 
 
-def add_annotations_by_hap_and_pop(input_mt: hl.MatrixTable) -> hl.MatrixTable:
+def add_annotations_by_hap_and_pop(input_mt: hl.MatrixTable, output_dir, overwrite) -> hl.MatrixTable:
     """
     Add variant annotations (such as AC, AN, AF, heteroplasmy histogram, and filtering allele frequency) split by haplogroup and population.
 
@@ -702,26 +712,34 @@ def add_annotations_by_hap_and_pop(input_mt: hl.MatrixTable) -> hl.MatrixTable:
         if not re.match("^[A-Z]", i):
             sys.exit(f"Invalid haplogroup {i}, does not start with a letter")
 
-    pre_hap_annotation_labels = [
+    pre_hap_annotation_labels_1 = [
         "pre_hap_AC",
         "pre_hap_AN",
         "pre_hap_AF",
         "pre_hap_AC_het",
         "pre_hap_AC_hom",
+    ]
+    for_annot = {re.sub("pre_", "", i): standardize_haps(input_mt, i, sorted(list_hap_order)) for i in pre_hap_annotation_labels_1}
+    input_mt = input_mt.annotate_rows(**for_annot)
+    # for i in pre_hap_annotation_labels:
+    #     final_annotation = re.sub(
+    #         "pre_", "", i
+    #     )  # remove "pre" prefix for final annotations
+    #     input_mt = input_mt.annotate_rows(
+    #         **{final_annotation: standardize_haps(input_mt, i, sorted(list_hap_order))}
+    #     )
+    input_mt = input_mt.checkpoint(f"{output_dir}/temp3.mt", overwrite=overwrite)
+
+    pre_hap_annotation_labels_2 = [
         "pre_hap_AF_hom",
         "pre_hap_AF_het",
         "pre_hap_hl_hist",
         "pre_hap_faf",
         "pre_hap_faf_hom",
     ]
-
-    for i in pre_hap_annotation_labels:
-        final_annotation = re.sub(
-            "pre_", "", i
-        )  # remove "pre" prefix for final annotations
-        input_mt = input_mt.annotate_rows(
-            **{final_annotation: standardize_haps(input_mt, i, sorted(list_hap_order))}
-        )
+    for_annot = {re.sub("pre_", "", i): standardize_haps(input_mt, i, sorted(list_hap_order)) for i in pre_hap_annotation_labels_2}
+    input_mt = input_mt.annotate_rows(**for_annot)
+    input_mt = input_mt.checkpoint(f"{output_dir}/temp4.mt", overwrite=overwrite)
 
     # Get a list of indexes where AC of the haplogroup is greater than 0, then get the list of haplogroups with that index
     input_mt = input_mt.annotate_rows(
@@ -744,12 +762,13 @@ def add_annotations_by_hap_and_pop(input_mt: hl.MatrixTable) -> hl.MatrixTable:
     )
 
     # Add populatation annotations
-    found_pops = set(input_mt.pop.collect())
-    # Order according to POPS
-    final_pops = [x for x in POPS if x in found_pops]
+    final_pops = set(input_mt.pop.collect())
 
-    if len(found_pops - set(POPS)) > 0:
-        sys.exit("Invalid population found")
+    # Order according to POPS
+    #final_pops = [x for x in POPS if x in found_pops]
+    #if len(found_pops - set(POPS)) > 0:
+    #    sys.exit("Invalid population found")
+    
     input_mt = input_mt.annotate_globals(pop_order=final_pops)
 
     pre_pop_annotation_labels = [
@@ -1223,7 +1242,7 @@ def add_vep(input_mt: hl.MatrixTable, run_vep: bool, vep_output: str) -> hl.Matr
     return input_mt
 
 
-def add_rsids(input_mt: hl.MatrixTable) -> hl.MatrixTable:
+def add_rsids(input_mt: hl.MatrixTable, band_aid_fix: bool) -> hl.MatrixTable:
     """
     Add rsid annotations to the MatrixTable.
 
@@ -1233,6 +1252,11 @@ def add_rsids(input_mt: hl.MatrixTable) -> hl.MatrixTable:
     dbsnp_import_args = dbsnp.versions["b154"].import_args
     # Replace the contig recoding with just the chrM mapping
     dbsnp_import_args.update({"contig_recoding": {"NC_012920.1": "chrM"}})
+    # If enabled, fix paths
+    if band_aid_fix:
+        band_aid_fun = lambda x: re.sub('gnomad-public-requester-pays', 'gcp-public-data--gnomad', x)
+        dbsnp_import_args.update({"path": band_aid_fun(dbsnp_import_args['path']),
+                                  'header_file': band_aid_fun(dbsnp_import_args['header_file'])})
     dbsnp_ht = _import_dbsnp(**dbsnp_import_args)
 
     input_mt = input_mt.annotate_rows(
@@ -1881,6 +1905,11 @@ def format_vcf(
                 "Number": ".",
                 "Type": "String",
             },
+            "FT_LIFT": {
+                "Description": "Sample-level liftover tags",
+                "Number": ".",
+                "Type": "String",
+            },
             "HL": {"Description": "Heteroplasmy level", "Number": "1", "Type": "Float"},
             "MQ": {"Description": "Mapping quality", "Number": "1", "Type": "Float"},
             "TLOD": {
@@ -1892,6 +1921,15 @@ def format_vcf(
     }
 
     return input_mt, meta_dict, vcf_header_file
+
+
+def modify_ft_liftover(mt):
+    these_f = hl.literal(CUSTOMLIFTOVERFILTERS.union(LIFTOVERFILTERS))
+    mt = mt.annotate_entries(FT_LIFT = mt.FT.intersection(these_f))
+    mt = mt.annotate_entries(FT = mt.FT.difference(these_f))    
+    mt = mt.annotate_entries(FT = mt.FT.difference(hl.literal(set(['PASS']))))
+    mt = mt.annotate_entries(FT = hl.if_else(hl.len(mt.FT) == 0, {"PASS"}, mt.FT))
+    return mt
 
 
 def main(args):  # noqa: D103
@@ -1909,10 +1947,13 @@ def main(args):  # noqa: D103
     logger.info("Cutoff for homoplasmic variants is set to %.2f...", min_hom_threshold)
 
     # Define mt path, output directory, subset name
-    subset_name = ""
+    subset_name = "_gnomad" if gnomad_subset else ""
 
     logger.info("Adding genotype annotation...")
     mt = add_genotype(mt_path, min_hom_threshold)
+
+    logger.info("Moving Liftover FT fields to a new entry...")
+    mt = modify_ft_liftover(mt)
 
     logger.info("Adding annotations from Terra...")
     mt = add_terra_metadata(mt, participant_data)
@@ -1938,7 +1979,6 @@ def main(args):  # noqa: D103
     # If specified, subet to only the gnomAD samples in the current release
     if gnomad_subset:
         logger.warning("Subsetting results to gnomAD release samples...")
-        subset_name = "_gnomad"
 
         # Subset to release samples and filter out rows that no longer have at least one alt call
         mt = mt.filter_cols(mt.release)  # Filter to cols where release is true
@@ -1964,7 +2004,31 @@ def main(args):  # noqa: D103
     mt = add_vep(mt, run_vep, vep_results)
 
     logger.info("Adding dbsnp annotations...")
-    mt = add_rsids(mt)
+    mt = add_rsids(mt, args.band_aid_dbsnp_path_fix)
+
+    logger.info("Annotating MT...")
+    mt, n_het_below_min_het_threshold = add_filter_annotations(
+        mt, vaf_filter_threshold, min_het_threshold
+    )
+
+    mt = mt.checkpoint(
+        f"{output_dir}/prior_to_filter_genotypes.mt", overwrite=args.overwrite
+    )
+
+    mt = filter_genotypes(mt)
+    # Add variant annotations such as AC, AF, and AN
+    mt = mt.annotate_rows(**dict(generate_expressions(mt, min_hom_threshold)))
+    # Checkpoint to help avoid Hail errors from large queries
+    mt = mt.checkpoint(f"{output_dir}/temp.mt", overwrite=args.overwrite)
+    
+    mt = add_quality_histograms(mt)
+    mt = mt.checkpoint(f"{output_dir}/temp2.mt", overwrite=args.overwrite)
+    
+    mt = add_annotations_by_hap_and_pop(mt, output_dir=output_dir, overwrite=args.overwrite)
+    
+    mt = add_descriptions(
+        mt, min_hom_threshold, vaf_filter_threshold, min_het_threshold
+    )
 
     logger.info("Setting up output paths...")
     annotated_mt_path = generate_output_paths(
@@ -2000,25 +2064,6 @@ def main(args):  # noqa: D103
         )
     )
 
-    logger.info("Annotating MT...")
-    mt, n_het_below_min_het_threshold = add_filter_annotations(
-        mt, vaf_filter_threshold, min_het_threshold
-    )
-
-    mt = mt.checkpoint(
-        f"{output_dir}/prior_to_filter_genotypes.mt", overwrite=args.overwrite
-    )
-
-    mt = filter_genotypes(mt)
-    # Add variant annotations such as AC, AF, and AN
-    mt = mt.annotate_rows(**dict(generate_expressions(mt, min_hom_threshold)))
-    # Checkpoint to help avoid Hail errors from large queries
-    mt = mt.checkpoint(f"{output_dir}/temp.mt", overwrite=args.overwrite)
-    mt = add_quality_histograms(mt)
-    mt = add_annotations_by_hap_and_pop(mt)
-    mt = add_descriptions(
-        mt, min_hom_threshold, vaf_filter_threshold, min_het_threshold
-    )
     mt = mt.checkpoint(
         annotated_mt_path, overwrite=args.overwrite
     )  # Full matrix table for internal use
@@ -2146,6 +2191,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--overwrite", help="Overwrites existing files", action="store_true"
+    )
+    parser.add_argument(
+        '--band-aid-dbsnp-path-fix', action='store_true', help='If enabled, uses a regex replace to fix the path to the dbSNP database.'
     )
 
     args = parser.parse_args()
