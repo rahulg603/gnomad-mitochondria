@@ -1,13 +1,13 @@
 #!/bin/bash
 
 #### PARAMETERS
-export numTest=6 # number of samples per iteration
-export numIter=500 # number of iterations
+export numTest=30 # number of samples per iteration
+export numIter=1 # number of iterations
 export JOBLIMIT=5000 # how many jobs to allow simulataneously
-export outputFold=220911_3000_21
+export outputFold=220920_30_36
 export PORTID=8094
 export USE_MEM=80
-export SQL_DB_NAME="local_cromwell_run.db" # name of local mySQL database
+export SQL_DB_NAME="local_cromwell_run.db" # name of local SQL database
 export FORCEDOWNLOAD='False' # if enabled, will force download for CRAM via gsutil -u {} cp
 export RERUN_FAIL='False' # if enabled, will try to rerun failures. If disabled, will filter out failures.
 export FILE_DONE="mt_pipeline_single_2_5_stats.tsv" # expects this to be in the current bucket
@@ -124,7 +124,9 @@ input_conf_rm = input_conf.replace(include_str_repl, '')
 cromwell_config_file = ConfigFactory.parse_string(input_conf_rm)
 cromwell_config_file['system'] = ConfigTree({'new-workflow-poll-rate': 1,
                                              'max-concurrent-workflows': joblimit,
-                                             'max-workflow-launch-count': 400})
+                                             'max-workflow-launch-count': 400,
+                                             'job-rate-control': ConfigTree({'jobs': 50,
+                                                                             'per': '3 seconds'})})
 cromwell_config_file['backend']['providers']['PAPIv2-beta']['config']['concurrent-job-limit'] = joblimit
 cromwell_config_file['backend']['providers']['PAPIv2-beta']['config']['genomics']['enable-fuse'] = True
 cromwell_config_file['database'] = ConfigTree({'profile': "slick.jdbc.HsqldbProfile$",
@@ -169,9 +171,18 @@ with open(f"cromwell_submission_script_individual_jobs.sh", "w") as text_file:
     text_file.write("#!/bin/bash\n")
 
 json_collection = []
+max_rows = df.shape[0]
 
 for idx in range(0, n_iter):
-    df_sub = df.iloc[idx*n_test: (idx+1)*n_test]
+
+    if (idx+1)*n_test >= max_rows:
+        this_max = max_rows
+        break_here = True
+    else:
+        this_max = (idx+1)*n_test
+        break_here = False
+    
+    df_sub = df.iloc[idx*n_test: this_max]
     s = list(df_sub.person_id)
     cram_paths = list(df_sub.cram_uri)
     crai_paths = list(df_sub.cram_index_uri)
@@ -208,6 +219,9 @@ for idx in range(0, n_iter):
 
     with open(f"{path_indiv_save}cromwell_submission_script_individual_jobs.sh", "a") as text_file:
         text_file.write(this_cromwell_cmd + '\n')
+
+    if break_here:
+        break
 
 batch_json_filename = f"batch_input_allofus.json"
 with open(batch_json_filename, 'w') as f:
