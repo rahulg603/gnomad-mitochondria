@@ -2000,8 +2000,9 @@ def main(args):  # noqa: D103
     )
     mt = mt.checkpoint(f"{output_dir}/prior_to_vep.mt", overwrite=args.overwrite)
 
-    logger.info("Adding vep annotations...")
-    mt = add_vep(mt, run_vep, vep_results)
+    if not args.fully_skip_vep:
+        logger.info("Adding vep annotations...")
+        mt = add_vep(mt, run_vep, vep_results)
 
     logger.info("Adding dbsnp annotations...")
     mt = add_rsids(mt, args.band_aid_dbsnp_path_fix)
@@ -2189,6 +2190,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run-vep", help="Set to True to run/rerun vep", action="store_true"
     )
+    parser.add_argument('--fully-skip-vep', action='store_true', help='If true, will skip VEP entirely.')
     parser.add_argument(
         "--overwrite", help="Overwrites existing files", action="store_true"
     )
