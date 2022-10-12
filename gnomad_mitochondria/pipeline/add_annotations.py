@@ -1035,11 +1035,11 @@ def format_filters(mt, row_f = ['filters'], entry_f = ['FT','FT_LIFT']):
     If a field is length 0, then it is processed here and does not become missing.
     This function prevents any filters of length 0.
     """
-    mt = mt.annotate_rows({x: mt[x].difference({'PASS'}) for x in row_f})
-    mt = mt.annotate_rows({x: hl.if_else(hl.len(mt[x]) == 0, {'PASS'}, mt[x]) for x in row_f})
+    mt = mt.annotate_rows(**{x: mt[x].difference({'PASS'}) for x in row_f})
+    mt = mt.annotate_rows(**{x: hl.if_else(hl.len(mt[x]) == 0, {'PASS'}, mt[x]) for x in row_f})
     
-    mt = mt.annotate_entries({x: mt[x].difference({'PASS'}) for x in entry_f})
-    mt = mt.annotate_entries({x: hl.if_else(hl.len(mt[x]) == 0, {'PASS'}, mt[x]) for x in entry_f})
+    mt = mt.annotate_entries(**{x: mt[x].difference({'PASS'}) for x in entry_f})
+    mt = mt.annotate_entries(**{x: hl.if_else(hl.len(mt[x]) == 0, {'PASS'}, mt[x]) for x in entry_f})
     return mt
 
 
