@@ -1121,7 +1121,7 @@ def filter_genotypes(input_mt: hl.MatrixTable) -> hl.MatrixTable:
         TLOD=hl.or_missing(pass_expr, input_mt.TLOD),
     )
 
-    input_mt = input_mt.annotate_entries(FT = hl.if_else(input_mt.FT == {'PASS'}, input_mt.FT.union({'GT_PASS'}, input_mt.FT)))
+    input_mt = input_mt.annotate_entries(FT = hl.if_else(input_mt.FT == {'PASS'}, input_mt.FT.union({'GT_PASS'}), input_mt.FT))
     input_mt = input_mt.annotate_entries(FT = input_mt.FT.difference({'PASS'}), FT_LIFT = input_mt.FT_LIFT.difference({'PASS'}))
 
     return input_mt
@@ -1996,9 +1996,9 @@ def process_mt_for_flat_file_analysis(mt):
     # there may be genotypes that are missing a call but do not have a reason for failure; these should have dp < 100
     # thus any records with DP > 100 and missing HL should have a reason for failure
     htf = ht.filter(ht.DP > 100)
-    if htf.aggregate(hl.agg.count_where(htf.is_missing(htf.FT))) > 0:
+    if htf.aggregate(hl.agg.count_where(hl.is_missing(htf.FT))) > 0:
         raise ValueError('There should be no missing filters when DP > 100.')
-    if htf.aggregate(hl.agg.count_where(htf.is_missing(htf.HL) & htf.FT.contains('GT_PASS'))) > 0:
+    if htf.aggregate(hl.agg.count_where(hl.is_missing(htf.HL) & htf.FT.contains('GT_PASS'))) > 0:
         raise ValueError('Any missing heteroplasmies at DP > 100 should not be passing in terms of FT.')
 
     ht = ht.annotate(AD_ref = ht.AD[0], AD_alt = ht.AD[1], FT = ht.FT.union(ht.filters)).drop('AD','filters')
