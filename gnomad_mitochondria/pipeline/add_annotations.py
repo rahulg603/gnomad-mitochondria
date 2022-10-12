@@ -189,7 +189,7 @@ def add_age_and_pop(input_mt: hl.MatrixTable, participant_data: str) -> hl.Matri
 
 def filter_by_hom_overlap(input_mt: hl.MatrixTable, keep_all_samples: bool, sample_stats: str):
     stat_ht = hl.import_table(sample_stats, impute=True, key='s')
-    input_mt = input_mt.annotate_cols(num_mt_overlaps = stat_ht[input_mt.row_key].mtdna_consensus_overlaps)
+    input_mt = input_mt.annotate_cols(num_mt_overlaps = stat_ht[input_mt.col_key].mtdna_consensus_overlaps)
     n_removed = input_mt.aggregate_cols(hl.agg.count_where(input_mt.num_mt_overlaps > 0))
     if not keep_all_samples:
         input_mt = input_mt.filter_cols(input_mt.num_mt_overlaps == 0)
@@ -1121,7 +1121,7 @@ def filter_genotypes(input_mt: hl.MatrixTable) -> hl.MatrixTable:
         TLOD=hl.or_missing(pass_expr, input_mt.TLOD),
     )
 
-    input_mt = input_mt.annotate_entries(FT = hl.if_else(input_mt.FT == {'PASS'}, input_mt.FT.union({'GT_PASS'})))
+    input_mt = input_mt.annotate_entries(FT = hl.if_else(input_mt.FT == {'PASS'}, input_mt.FT.union({'GT_PASS'}, input_mt.FT)))
     input_mt = input_mt.annotate_entries(FT = input_mt.FT.difference({'PASS'}), FT_LIFT = input_mt.FT_LIFT.difference({'PASS'}))
 
     return input_mt
