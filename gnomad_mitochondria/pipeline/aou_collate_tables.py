@@ -1,3 +1,5 @@
+# Pipeline for the merging of mtSwirl pipeline outputs in AllofUs.
+# Imports and appends QC file information as well.
 # see QC field explanations here:
 # https://aousupporthelp.zendesk.com/hc/en-us/articles/4614687617556-How-the-All-of-Us-Genomic-data-are-organized
 

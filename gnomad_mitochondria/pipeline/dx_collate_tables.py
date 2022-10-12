@@ -1,3 +1,9 @@
+# Pipeline for the merging of mtSwirl pipeline outputs on DNANexus.
+# This pipeline also merges QC files from DNANexus. Note that these files were not
+# produced for all samples, though it seems like the set of samples for which QC files
+# are available corresponds to the set of files for which there was sufficient
+# freemix contamination to warrant a second run of contamination estimation.
+
 import hail as hl
 import pandas as pd
 import numpy as np

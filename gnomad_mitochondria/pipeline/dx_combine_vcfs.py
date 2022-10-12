@@ -450,10 +450,11 @@ def main(args):  # noqa: D103
     combined_mt = combined_mt.repartition(args.n_final_partitions).checkpoint(out_mt, overwrite=args.overwrite)
 
     logger.info("Writing trimmed variants table...")
+    logger.info("We export missing variants; all others are considered homozygous reference.")
     ht_for_tsv = combined_mt.entries()
-    ht_for_tsv = ht_for_tsv.annotate(HL=hl.if_else(hl.is_defined(ht_for_tsv['HL']), ht_for_tsv['HL'], 0))
-    ht_for_tsv = ht_for_tsv.annotate(FT=hl.if_else(ht_for_tsv['HL']==0, hl.missing('set<str>'), ht_for_tsv['FT']))
-    ht_for_tsv = ht_for_tsv.filter(ht_for_tsv.HL > 0)
+    #ht_for_tsv = ht_for_tsv.annotate(HL=hl.if_else(hl.is_defined(ht_for_tsv['HL']), ht_for_tsv['HL'], 0))
+    #ht_for_tsv = ht_for_tsv.annotate(FT=hl.if_else(ht_for_tsv['HL']==0, hl.missing('set<str>'), ht_for_tsv['FT']))
+    ht_for_tsv = ht_for_tsv.filter(hl.is_missing(ht_for_tsv.HL) | (ht_for_tsv.HL > 0))
     ht_for_tsv.repartition(50).export(out_tsv)
 
     logger.info("Writing combined VCF...")

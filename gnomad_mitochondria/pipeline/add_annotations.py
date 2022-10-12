@@ -187,6 +187,16 @@ def add_age_and_pop(input_mt: hl.MatrixTable, participant_data: str) -> hl.Matri
     return input_mt
 
 
+def filter_by_hom_overlap(input_mt: hl.MatrixTable, keep_all_samples: bool, sample_stats: str):
+    stat_ht = hl.import_table(sample_stats, impute=True, key='s')
+    input_mt = input_mt.annotate_cols(num_mt_overlaps = stat_ht[input_mt.row_key].mtdna_consensus_overlaps)
+    n_removed = input_mt.aggregate_cols(hl.agg.count_where(input_mt.num_mt_overlaps > 0))
+    if not keep_all_samples:
+        input_mt = input_mt.filter_cols(input_mt.num_mt_overlaps == 0)
+    
+    return input_mt.drop('num_mt_overlaps'), n_removed
+
+
 def filter_by_copy_number(
     input_mt: hl.MatrixTable, keep_all_samples: bool = False
 ) -> hl.MatrixTable:
@@ -822,11 +832,7 @@ def add_annotations_by_hap_and_pop(input_mt: hl.MatrixTable, output_dir, overwri
         "n_alt_haps",
     )
 
-    input_mt = input_mt.annotate_rows(
-        filters=hl.if_else(
-            input_mt.filters == {"PASS"}, hl.empty_set(hl.tstr), input_mt.filters
-        )
-    )
+    input_mt = input_mt.annotate_rows(filters=input_mt.filters.difference({"PASS"}))
 
     return input_mt
 
@@ -842,6 +848,7 @@ def apply_common_low_het_flag(input_mt: hl.MatrixTable) -> hl.MatrixTable:
     :param input_mt: MatrixTable
     :return: MatrixTable with the common_low_heteroplasmy flag added
     """
+    input_mt = format_filters(input_mt)
     input_mt = input_mt.annotate_rows(
         AC_mid_het=hl.agg.count_where(
             (input_mt.HL < 0.50)
@@ -860,7 +867,7 @@ def apply_common_low_het_flag(input_mt: hl.MatrixTable) -> hl.MatrixTable:
         common_low_heteroplasmy=input_mt.AF_mid_het > 0.001
     )
 
-    return input_mt
+    return format_filters(input_mt)
 
 
 def remove_low_allele_frac_genotypes(
@@ -955,7 +962,7 @@ def apply_indel_stack_filter(input_mt: hl.MatrixTable) -> hl.MatrixTable:
         )
     )
 
-    return input_mt
+    return format_filters(input_mt)
 
 
 def filter_genotypes_below_min_het_threshold(
@@ -979,12 +986,8 @@ def filter_genotypes_below_min_het_threshold(
         )
     )
 
-    # Remove "PASS" from FT if it's not the only filter
-    input_mt = input_mt.annotate_entries(
-        FT=hl.if_else(input_mt.FT != {"PASS"}, input_mt.FT.remove("PASS"), input_mt.FT)
-    )
 
-    return input_mt
+    return format_filters(input_mt)
 
 
 def apply_npg_filter(input_mt: hl.MatrixTable) -> hl.MatrixTable:
@@ -996,6 +999,7 @@ def apply_npg_filter(input_mt: hl.MatrixTable) -> hl.MatrixTable:
     :param input_mt: MatrixTable
     :return: MatrixTable with the npg filter added
     """
+    input_mt = format_filters(input_mt)
     input_mt = input_mt.annotate_rows(
         filters=hl.if_else(
             ~(hl.agg.any((input_mt.HL > 0.0) & (input_mt.FT == {"PASS"}))),
@@ -1004,7 +1008,7 @@ def apply_npg_filter(input_mt: hl.MatrixTable) -> hl.MatrixTable:
         )
     )
 
-    return input_mt
+    return format_filters(input_mt)
 
 
 def generate_filter_histogram(
@@ -1024,6 +1028,21 @@ def generate_filter_histogram(
     return filter_histogram
 
 
+def format_filters(mt, row_f = ['filters'], entry_f = ['FT','FT_LIFT']):
+    """ 
+    Ensures that for all relevant filter fields, PASS is only present when there are no filters present.
+    If a field is hl.missing(), then len and if_else produces a missing value. Thus it remains missing.
+    If a field is length 0, then it is processed here and does not become missing.
+    This function prevents any filters of length 0.
+    """
+    mt = mt.annotate_rows({x: mt[x].difference({'PASS'}) for x in row_f})
+    mt = mt.annotate_rows({x: hl.if_else(hl.len(mt[x]) == 0, {'PASS'}, mt[x]) for x in row_f})
+    
+    mt = mt.annotate_entries({x: mt[x].difference({'PASS'}) for x in entry_f})
+    mt = mt.annotate_entries({x: hl.if_else(hl.len(mt[x]) == 0, {'PASS'}, mt[x]) for x in entry_f})
+    return mt
+
+
 def add_filter_annotations(
     input_mt: hl.MatrixTable,
     vaf_filter_threshold: float = 0.01,
@@ -1040,6 +1059,7 @@ def add_filter_annotations(
     # TODO: pull these from header instead?
     filters = [
         "base_qual",
+        "map_qual",
         "position",
         "strand_bias",
         "weak_evidence",
@@ -1079,16 +1099,7 @@ def add_filter_annotations(
         excluded_AC=hl.agg.count_where(input_mt.FT != {"PASS"})
     )
 
-    # Remove "PASS" from filters column if it's not the only filter
-    input_mt = input_mt.annotate_rows(
-        filters=hl.if_else(
-            input_mt.filters != {"PASS"},
-            input_mt.filters.remove("PASS"),
-            input_mt.filters,
-        )
-    )
-
-    return input_mt, n_het_below_min_het_threshold
+    return format_filters(input_mt), n_het_below_min_het_threshold
 
 
 def filter_genotypes(input_mt: hl.MatrixTable) -> hl.MatrixTable:
@@ -1104,10 +1115,14 @@ def filter_genotypes(input_mt: hl.MatrixTable) -> hl.MatrixTable:
         GT=hl.or_missing(pass_expr, input_mt.GT),
         DP=hl.or_missing(pass_expr, input_mt.DP),
         HL=hl.or_missing(pass_expr, input_mt.HL),
-        FT=hl.or_missing(pass_expr, input_mt.FT),
+        #FT=hl.or_missing(pass_expr, input_mt.FT),
+        #FT_LIFT=hl.or_missing(pass_expr, input_mt.FT_LIFT),
         MQ=hl.or_missing(pass_expr, input_mt.MQ),
         TLOD=hl.or_missing(pass_expr, input_mt.TLOD),
     )
+
+    input_mt = input_mt.annotate_entries(FT = hl.if_else(input_mt.FT == {'PASS'}, input_mt.FT.union({'GT_PASS'})))
+    input_mt = input_mt.annotate_entries(FT = input_mt.FT.difference({'PASS'}), FT_LIFT = input_mt.FT_LIFT.difference({'PASS'}))
 
     return input_mt
 
@@ -1322,6 +1337,7 @@ def report_stats(
     n_samples_above_cn: int,
     n_samples_contam: int,
     n_het_below_min_het_threshold: int,
+    n_removed_overlap: int,
     min_het_threshold: float = 0.10,
     min_hom_threshold: float = 0.95,
 ) -> None:
@@ -1335,6 +1351,7 @@ def report_stats(
     :param n_samples_above_cn: Number of samples removed because mitochondrial number is above 500
     :param n_samples_contam: Number of samples removed because of contamination
     :param n_het_below_min_het_threshold: Number of genotypes filtered because the heteroplasmy levels was below the min_het_threshold
+    :param n_removed_overlap: Number of samples filtered because there were overlapping homoplasmies
     :param min_het_threshold: Minimum heteroplasmy level to define a variant as a PASS heteroplasmic variant, genotypes below this threshold will count towards the heteroplasmy_below_min_het_threshold filter and be set to missing
     :param min_hom_threshold: Minimum heteroplasmy level to define a variant as homoplasmic
     :return: None
@@ -1350,6 +1367,9 @@ def report_stats(
         out_stats.write("Below metrics are for PASS-only variants\n\n")
 
     # Report numbers of filtered samples/genotypes
+    out_stats.write(
+        f"Number of samples removed because of overlapping homoplasmies: {n_removed_overlap}\n"
+    )
     out_stats.write(
         f"Number of samples removed because contamination above 2%: {n_samples_contam}\n"
     )
@@ -1511,6 +1531,7 @@ def format_vcf(
     min_hom_threshold: float = 0.95,
     vaf_filter_threshold: float = 0.01,
     min_het_threshold: float = 0.10,
+    skip_vep: bool = False,
 ) -> dict:
     """
     Generate dictionary for VCF header annotations.
@@ -1547,7 +1568,8 @@ def format_vcf(
         dp_hist_alt_bin_freq=input_mt.dp_hist_alt.bin_freq,
     )
 
-    input_mt = input_mt.annotate_rows(vep=vep_struct_to_csq(input_mt.vep))
+    if not skip_vep:
+        input_mt = input_mt.annotate_rows(vep=vep_struct_to_csq(input_mt.vep))
 
     # Get length of annotations to use in Number fields in the VCF where necessary
     len_hap_hl_hist = len(input_mt.hap_hl_hist.take(1)[0])
@@ -1555,14 +1577,23 @@ def format_vcf(
 
     # Output appended header info to file
     vcf_header_file = output_dir + "/extra_fields_for_header.tsv"
-    appended_vcf_header = dedent(
-        f"""
-    ##VEP version={hl.eval(input_mt.vep_version)}
-    ##dbSNP version={hl.eval(input_mt.dbsnp_version)}
-    ##age distributions=bin_edges:{hl.eval(input_mt.age_hist_all_samples_bin_edges)}, bin_freq:{hl.eval(input_mt.age_hist_all_samples_bin_freq)}, n_smaller:{hl.eval(input_mt.age_hist_all_samples_n_smaller)}, n_larger:{hl.eval(input_mt.age_hist_all_samples_n_larger)}
+    if not skip_vep:
+        appended_vcf_header = dedent(
+            f"""
+        ##VEP version={hl.eval(input_mt.vep_version)}
+        ##dbSNP version={hl.eval(input_mt.dbsnp_version)}
+        ##age distributions=bin_edges:{hl.eval(input_mt.age_hist_all_samples_bin_edges)}, bin_freq:{hl.eval(input_mt.age_hist_all_samples_bin_freq)}, n_smaller:{hl.eval(input_mt.age_hist_all_samples_n_smaller)}, n_larger:{hl.eval(input_mt.age_hist_all_samples_n_larger)}
 
-    """
-    )
+        """
+        )
+    else:
+        appended_vcf_header = dedent(
+            f"""
+        ##dbSNP version={hl.eval(input_mt.dbsnp_version)}
+        ##age distributions=bin_edges:{hl.eval(input_mt.age_hist_all_samples_bin_edges)}, bin_freq:{hl.eval(input_mt.age_hist_all_samples_bin_freq)}, n_smaller:{hl.eval(input_mt.age_hist_all_samples_n_smaller)}, n_larger:{hl.eval(input_mt.age_hist_all_samples_n_larger)}
+
+        """
+        )
     with hl.hadoop_open(vcf_header_file, "w") as out:
         out.write(appended_vcf_header)
 
@@ -1927,9 +1958,58 @@ def modify_ft_liftover(mt):
     these_f = hl.literal(CUSTOMLIFTOVERFILTERS.union(LIFTOVERFILTERS))
     mt = mt.annotate_entries(FT_LIFT = mt.FT.intersection(these_f))
     mt = mt.annotate_entries(FT = mt.FT.difference(these_f))    
-    mt = mt.annotate_entries(FT = mt.FT.difference(hl.literal(set(['PASS']))))
-    mt = mt.annotate_entries(FT = hl.if_else(hl.len(mt.FT) == 0, {"PASS"}, mt.FT))
-    return mt
+    #mt = mt.annotate_entries(FT = mt.FT.difference({'PASS'}))
+    #mt = mt.annotate_entries(FT = hl.if_else(hl.len(mt.FT) == 0, {"PASS"}, mt.FT))
+    return format_filters(mt)
+
+
+def make_comma_delim(expr):
+    return hl.literal(',').join(hl.map(hl.str, expr))
+
+
+def process_mt_for_flat_file_analysis(mt):
+    """ 
+    Function to format the MT into high-yield fields used for downstream analysis.
+    
+    NOTE: We now filter to sites that have HL missing or > 0 because /most sites/ are hom ref
+    with HL = 0. The sites with missing HL are uncertain - these sites have either low coverage 
+    or have a variant that was filtered. This way the set of true zeros can be obtained
+    efficiently as the set of samples not present in this dataset.
+    """
+    mt = mt.annotate_rows(ancestral = mt.vep.ancestral, 
+                          most_severe_csq=mt.vep.most_severe_consequence
+                          ).select_globals(
+                          ).select_rows('rsid', 'common_low_heteroplasmy', 'filters', 
+                                        'hap_defining_variant', 'pon_mt_trna_prediction',
+                                        'pon_ml_probability_of_pathogenicity','mitotip_score',
+                                        'mitotip_trna_prediction','region', 'variant_context',
+                                        'ancestral', 'most_severe_csq', 'dp_mean', 'mq_mean',
+                                        'tlod_mean', 'AF_hom', 'AF_het', 'AC_hom', 'AC_het', 'max_hl',
+                                        'excluded_AC'
+                          ).select_cols('batch', 'contamination', 'freemix_percentage', 
+                                        'contam_high_het', 'freemix_percentage_imp',
+                                        'major_haplogroup', 'hap', 'wgs_median_coverage',
+                                        'mt_mean_coverage', 'mito_cn', 'age', 'pop', 
+                                        'over_85_mean', 'over_85_count')
+    ht = mt.filter_entries(hl.is_missing(mt.HL) | (mt.HL > 0)).entries()
+    ht = ht.annotate(AD_ref = ht.AD[0], AD_alt = ht.AD[1], FT = ht.FT.union(ht.filters)).drop('AD','filters')
+    ht = ht.annotate(FT = ht.FT.difference({'PASS'}), FT_LIFT = ht.FT_LIFT.difference({'PASS'}))
+    
+    # fail_gt should be a subset of missing_call
+    # case/control should be computed with controls excluding missing_call samples
+    ht = ht.annotate(artifact_prone = ht.FT.contains('artifact_prone'),
+                     lifted = hl.len(ht.FT_LIFT) > 0,
+                     fail_gt = ~ht.FT.contains('GT_PASS'),
+                     missing_call = hl.is_missing(ht.HL)).key_by()
+
+    # confirm that all fail_gt are missing a call
+    if ht.aggregate(hl.agg.count_where(ht.fail_gt & (~ht.missing_call))):
+        raise ValueError('All samples where "GT_PASS" is not found should be missing a heteroplasmy call.')
+
+    ht = ht.annotate(**{x: make_comma_delim(ht[x]) for x in ['FT','FT_LIFT','OriginalSelfRefAlleles','alleles','rsid']})
+    ht = ht.annotate(locus = ht.locus.contig.replace('MT','chrM') + ':' + hl.str(ht.locus.position))
+    ht = ht.annotate(variant = ht.locus + ':' + ht.alleles).key_by('locus','alleles','s')
+    return ht.key_by('locus', 'alleles', 's')
 
 
 def main(args):  # noqa: D103
@@ -1948,88 +2028,6 @@ def main(args):  # noqa: D103
 
     # Define mt path, output directory, subset name
     subset_name = "_gnomad" if gnomad_subset else ""
-
-    logger.info("Adding genotype annotation...")
-    mt = add_genotype(mt_path, min_hom_threshold)
-
-    logger.info("Moving Liftover FT fields to a new entry...")
-    mt = modify_ft_liftover(mt)
-
-    logger.info("Adding annotations from Terra...")
-    mt = add_terra_metadata(mt, participant_data)
-
-    logger.info("Annotating haplogroup-defining variants...")
-    mt = add_hap_defining(mt)
-
-    logger.info("Annotating tRNA predictions...")
-    mt = add_trna_predictions(mt)
-
-    # If 'subset-to-gnomad-release' is set, 'age' and 'pop' are added by the add_gnomad_metadata function.
-    # If 'subset-to-gnomad-release' is not set, the user should include an 'age' and 'pop' column in the file supplied to `participant-data`.
-    if gnomad_subset:
-        logger.info("Adding gnomAD metadata sample annotations...")
-        mt = add_gnomad_metadata(mt)
-    else:
-        logger.info("Checking for and adding age and pop annotations...")
-        mt = add_age_and_pop(mt, participant_data)
-
-    logger.info("Adding variant context annotations...")
-    mt = add_variant_context(mt)
-
-    # If specified, subet to only the gnomAD samples in the current release
-    if gnomad_subset:
-        logger.warning("Subsetting results to gnomAD release samples...")
-
-        # Subset to release samples and filter out rows that no longer have at least one alt call
-        mt = mt.filter_cols(mt.release)  # Filter to cols where release is true
-        mt = mt.filter_rows(hl.agg.any(mt.HL > 0))
-
-    logger.info("Checking for samples with low/high mitochondrial copy number...")
-    mt, n_removed_below_cn, n_removed_above_cn = filter_by_copy_number(
-        mt, keep_all_samples
-    )
-
-    logger.info("Checking for contaminated samples...")
-    mt, n_contaminated = filter_by_contamination(mt, output_dir, keep_all_samples)
-
-    logger.info("Switch build and checkpoint...")
-    # Switch build 37 to build 38
-    mt = mt.key_rows_by(
-        locus=hl.locus("chrM", mt.locus.position, reference_genome="GRCh38"),
-        alleles=mt.alleles,
-    )
-    mt = mt.checkpoint(f"{output_dir}/prior_to_vep.mt", overwrite=args.overwrite)
-
-    if not args.fully_skip_vep:
-        logger.info("Adding vep annotations...")
-        mt = add_vep(mt, run_vep, vep_results)
-
-    logger.info("Adding dbsnp annotations...")
-    mt = add_rsids(mt, args.band_aid_dbsnp_path_fix)
-
-    logger.info("Annotating MT...")
-    mt, n_het_below_min_het_threshold = add_filter_annotations(
-        mt, vaf_filter_threshold, min_het_threshold
-    )
-
-    mt = mt.checkpoint(
-        f"{output_dir}/prior_to_filter_genotypes.mt", overwrite=args.overwrite
-    )
-
-    mt = filter_genotypes(mt)
-    # Add variant annotations such as AC, AF, and AN
-    mt = mt.annotate_rows(**dict(generate_expressions(mt, min_hom_threshold)))
-    # Checkpoint to help avoid Hail errors from large queries
-    mt = mt.checkpoint(f"{output_dir}/temp.mt", overwrite=args.overwrite)
-    
-    mt = add_quality_histograms(mt)
-    mt = mt.checkpoint(f"{output_dir}/temp2.mt", overwrite=args.overwrite)
-    
-    mt = add_annotations_by_hap_and_pop(mt, output_dir=output_dir, overwrite=args.overwrite)
-    
-    mt = add_descriptions(
-        mt, min_hom_threshold, vaf_filter_threshold, min_het_threshold
-    )
 
     logger.info("Setting up output paths...")
     annotated_mt_path = generate_output_paths(
@@ -2065,29 +2063,158 @@ def main(args):  # noqa: D103
         )
     )
 
-    mt = mt.checkpoint(
-        annotated_mt_path, overwrite=args.overwrite
-    )  # Full matrix table for internal use
+    run_full = True
+    if args.debug_allow_intermediate_read:
+        logger.info("INTERMEDIATE READ ENABLED... checking for intermediate mt...")
+        if hl.hadoop_exists(f'{annotated_mt_path}/_SUCCESS'):
+            logger.info("INTERMEDIATE MT FOUND. NOT EXPORTING STATS.")
+            mt = hl.read_matrix_table(annotated_mt_path)
+            run_full = False
+        else:
+            logger.info("INTERMEDIATE MT NOT FOUND.")
 
-    logger.info("Generating summary statistics reports...")
-    report_stats(
-        mt,
-        output_dir,
-        False,
-        n_removed_below_cn,
-        n_removed_above_cn,
-        n_contaminated,
-        n_het_below_min_het_threshold,
-    )
-    report_stats(
-        mt,
-        output_dir,
-        True,
-        n_removed_below_cn,
-        n_removed_above_cn,
-        n_contaminated,
-        n_het_below_min_het_threshold,
-    )
+    if run_full:
+        logger.info("Adding genotype annotation...")
+        # NOTE: on import, there are no instances of hl.len(FT) == 0. Missing FT implies no HL measured with confidence.
+        mt = add_genotype(mt_path, min_hom_threshold)
+
+        logger.info("Moving Liftover FT fields to a new entry...")
+        mt = modify_ft_liftover(mt)
+
+        logger.info("Adding annotations from Terra...")
+        mt = add_terra_metadata(mt, participant_data)
+
+        logger.info("Annotating haplogroup-defining variants...")
+        mt = add_hap_defining(mt)
+
+        logger.info("Annotating tRNA predictions...")
+        mt = add_trna_predictions(mt)
+
+        # If 'subset-to-gnomad-release' is set, 'age' and 'pop' are added by the add_gnomad_metadata function.
+        # If 'subset-to-gnomad-release' is not set, the user should include an 'age' and 'pop' column in the file supplied to `participant-data`.
+        if gnomad_subset:
+            logger.info("Adding gnomAD metadata sample annotations...")
+            mt = add_gnomad_metadata(mt)
+        else:
+            logger.info("Checking for and adding age and pop annotations...")
+            mt = add_age_and_pop(mt, participant_data)
+
+        logger.info("Adding variant context annotations...")
+        mt = add_variant_context(mt)
+
+        # If specified, subet to only the gnomAD samples in the current release
+        if gnomad_subset:
+            logger.warning("Subsetting results to gnomAD release samples...")
+
+            # Subset to release samples and filter out rows that no longer have at least one alt call
+            mt = mt.filter_cols(mt.release)  # Filter to cols where release is true
+            mt = mt.filter_rows(hl.agg.any(mt.HL > 0))
+
+        logger.info('Removing samples which show overlapping homoplasmies in self-reference construction...')
+        mt, n_removed_overlap = filter_by_hom_overlap(
+            mt, keep_all_samples, args.sample_stats
+        )
+
+        logger.info("Checking for samples with low/high mitochondrial copy number...")
+        mt, n_removed_below_cn, n_removed_above_cn = filter_by_copy_number(
+            mt, keep_all_samples
+        )
+
+        logger.info("Checking for contaminated samples...")
+        mt, n_contaminated = filter_by_contamination(mt, output_dir, keep_all_samples)
+
+        logger.info("Switch build and checkpoint...")
+        # Switch build 37 to build 38
+        mt = mt.key_rows_by(
+            locus=hl.locus("chrM", mt.locus.position, reference_genome="GRCh38"),
+            alleles=mt.alleles,
+        )
+        # NOTE: at this stage there should still be no instances of hl.len(FT) == 0. Missing FT implies HL not called.
+        # NOTE: all missing HL entries have missing FT. These are entries with low DP so cannot be called hom ref.
+        mt = mt.checkpoint(f"{output_dir}/prior_to_vep.mt", overwrite=args.overwrite)
+
+        if not args.fully_skip_vep:
+            logger.info("Adding vep annotations...")
+            mt = add_vep(mt, run_vep, vep_results)
+
+        logger.info("Adding dbsnp annotations...")
+        mt = add_rsids(mt, args.band_aid_dbsnp_path_fix)
+
+        logger.info("Annotating MT...")
+        mt, n_het_below_min_het_threshold = add_filter_annotations(
+            mt, vaf_filter_threshold, min_het_threshold
+        )
+        mt = mt.checkpoint(
+            f"{output_dir}/prior_to_filter_genotypes.mt", overwrite=args.overwrite
+        )
+
+        # Some checks
+        # NOTE: at this stage there should still be no instances of hl.len(FT) == 0. Missing FT implies HL not called.
+        if mt.aggregate_entries(hl.agg.count_where(hl.len(mt.FT) == 0)) > 0:
+            raise ValueError('Before filtering genotypes, there should be no entries with FT of length 0.')
+        # NOTE: all missing HL entries have missing FT. These are entries with low DP so cannot be called hom ref.
+        mtf = mt.filter_entries(hl.is_missing(mt.FT))
+        if mtf.aggregate_entries(hl.agg.count_where(hl.is_defined(mtf.HL))) > 0:
+            raise ValueError('No entries with missing FT should have defined HL.')
+        mtf = mt.filter_entries(hl.is_missing(mt.HL))
+        if mtf.aggregate_entries(hl.agg.count_where(hl.is_defined(mtf.FT))) > 0:
+            raise ValueError('No entries with missing HL should have defined FT.')
+        # NOTE: at this stage, there should be no missing filters and no filters of length 0
+        if mt.filter_rows(hl.is_missing(mt.filters)).count_rows() > 0:
+            raise ValueError('There should be no rows with missing variant-level filters.')
+        if mt.filter_rows(hl.len(mt.filters) == 0).count_rows() > 0:
+            raise ValueError('There should be no rows with variant-level filters of length 0.')
+
+
+        # After this, passing GTs have "GT_PASS" rather than PASS in FT. Failing GTs have a reason for failure.
+        # FT_LIFT also no longer has "PASS" and can have length 0.
+        mt = filter_genotypes(mt)
+        # Add variant annotations such as AC, AF, and AN
+        mt = mt.annotate_rows(**dict(generate_expressions(mt, min_hom_threshold)))
+        # Checkpoint to help avoid Hail errors from large queries
+        mt = mt.checkpoint(f"{output_dir}/temp.mt", overwrite=args.overwrite)
+        
+        mt = add_quality_histograms(mt)
+        mt = mt.checkpoint(f"{output_dir}/temp2.mt", overwrite=args.overwrite)
+        
+        # After this, filters no longer contain "PASS"
+        # FT and FT_LIFT do not contain PASS as of filter_genotypes
+        # FT instead contains "GT_PASS"; FT_LIFT can be empty
+        mt = add_annotations_by_hap_and_pop(mt, output_dir=output_dir, overwrite=args.overwrite)
+        
+        mt = add_descriptions(
+            mt, min_hom_threshold, vaf_filter_threshold, min_het_threshold
+        )
+
+        mt = mt.checkpoint(
+            annotated_mt_path, overwrite=args.overwrite
+        )  # Full matrix table for internal use
+
+        logger.info("Generating summary statistics reports...")
+        report_stats(
+            mt,
+            output_dir,
+            False,
+            n_removed_below_cn,
+            n_removed_above_cn,
+            n_contaminated,
+            n_het_below_min_het_threshold,
+            n_removed_overlap
+        )
+        report_stats(
+            mt,
+            output_dir,
+            True,
+            n_removed_below_cn,
+            n_removed_above_cn,
+            n_contaminated,
+            n_het_below_min_het_threshold,
+            n_removed_overlap
+        )
+
+    logger.info('Writing variants flat file for internal use...')
+    ht_for_output = process_mt_for_flat_file_analysis(mt)
+    ht_for_output.export(annotated_mt_path.replace('.mt','_processed_flat.tsv.bgz'))
 
     logger.info("Writing ht...")
     variant_ht = mt.rows()
@@ -2109,7 +2236,7 @@ def main(args):  # noqa: D103
     logger.info("Formatting and writing VCF...")
     rows_ht = mt.rows()
     export_simplified_variants(rows_ht, output_dir)
-    vcf_mt, vcf_meta, vcf_header_file = format_vcf(mt, output_dir, min_hom_threshold)
+    vcf_mt, vcf_meta, vcf_header_file = format_vcf(mt, output_dir, min_hom_threshold, skip_vep=args.fully_skip_vep)
     hl.export_vcf(
         vcf_mt,
         samples_vcf_path,
@@ -2184,7 +2311,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--keep-all-samples",
-        help="Set to True to keep all samples (will skip steps that filter samples because of contamination and/or mitochondrial copy number)",
+        help="Set to True to keep all samples (will skip steps that filter samples because of contamination, overlapping homoplasmies, and/or mitochondrial copy number)",
         action="store_true",
     )
     parser.add_argument(
@@ -2196,6 +2323,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--band-aid-dbsnp-path-fix', action='store_true', help='If enabled, uses a regex replace to fix the path to the dbSNP database.'
+    )
+    parser.add_argument(
+        '--debug-allow-intermediate-read', action='store_true', help='If true, will read intermediates from disk. If found, assumes stats have been exported.'
+    )
+    parser.add_argument(
+        '--sample-stats', required=True, help='Path to sample statistics file. Used to remove samples that show overlapping mtDNA homoplasmies.'
     )
 
     args = parser.parse_args()

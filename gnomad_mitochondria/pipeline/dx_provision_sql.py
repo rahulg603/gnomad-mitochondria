@@ -1,3 +1,5 @@
+# Tool for provisioning a SQL database on DNANexus.
+
 import pyspark
 import dxpy
 import argparse
