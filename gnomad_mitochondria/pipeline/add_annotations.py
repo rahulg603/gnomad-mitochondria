@@ -1992,6 +1992,15 @@ def process_mt_for_flat_file_analysis(mt):
                                         'mt_mean_coverage', 'mito_cn', 'age', 'pop', 
                                         'over_85_mean', 'over_85_count')
     ht = mt.filter_entries(hl.is_missing(mt.HL) | (mt.HL > 0)).entries()
+
+    # there may be genotypes that are missing a call but do not have a reason for failure; these should have dp < 100
+    # thus any records with DP > 100 and missing HL should have a reason for failure
+    htf = ht.filter(ht.DP > 100)
+    if htf.aggregate(hl.agg.count_where(htf.is_missing(htf.FT))) > 0:
+        raise ValueError('There should be no missing filters when DP > 100.')
+    if htf.aggregate(hl.agg.count_where(htf.is_missing(htf.HL) & htf.FT.contains('GT_PASS'))) > 0:
+        raise ValueError('Any missing heteroplasmies at DP > 100 should not be passing in terms of FT.')
+
     ht = ht.annotate(AD_ref = ht.AD[0], AD_alt = ht.AD[1], FT = ht.FT.union(ht.filters)).drop('AD','filters')
     ht = ht.annotate(FT = ht.FT.difference({'PASS'}), FT_LIFT = ht.FT_LIFT.difference({'PASS'}))
     
@@ -2003,7 +2012,7 @@ def process_mt_for_flat_file_analysis(mt):
                      missing_call = hl.is_missing(ht.HL)).key_by()
 
     # confirm that all fail_gt are missing a call
-    if ht.aggregate(hl.agg.count_where(ht.fail_gt & (~ht.missing_call))):
+    if ht.aggregate(hl.agg.count_where(ht.fail_gt & (~ht.missing_call))) > 0:
         raise ValueError('All samples where "GT_PASS" is not found should be missing a heteroplasmy call.')
 
     ht = ht.annotate(**{x: make_comma_delim(ht[x]) for x in ['FT','FT_LIFT','OriginalSelfRefAlleles','alleles','rsid']})
