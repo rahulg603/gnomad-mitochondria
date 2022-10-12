@@ -2006,7 +2006,7 @@ def process_mt_for_flat_file_analysis(mt):
     
     # fail_gt should be a subset of missing_call
     # case/control should be computed with controls excluding missing_call samples
-    ht = ht.annotate(artifact_prone = ht.FT.contains('artifact_prone'),
+    ht = ht.annotate(artifact_prone = ht.FT.contains('artifact_prone_site'),
                      lifted = hl.len(ht.FT_LIFT) > 0,
                      fail_gt = ~ht.FT.contains('GT_PASS'),
                      missing_call = hl.is_missing(ht.HL)).key_by()
