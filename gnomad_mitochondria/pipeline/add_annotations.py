@@ -188,7 +188,7 @@ def add_age_and_pop(input_mt: hl.MatrixTable, participant_data: str) -> hl.Matri
 
 
 def filter_by_hom_overlap(input_mt: hl.MatrixTable, keep_all_samples: bool, sample_stats: str):
-    stat_ht = hl.import_table(sample_stats, impute=True, key='s')
+    stat_ht = hl.import_table(sample_stats, impute=True, key='s', types={'s':hl.tstr})
     input_mt = input_mt.annotate_cols(num_mt_overlaps = stat_ht[input_mt.col_key].mtdna_consensus_overlaps)
     n_removed = input_mt.aggregate_cols(hl.agg.count_where(input_mt.num_mt_overlaps > 0))
     if not keep_all_samples:
@@ -1960,7 +1960,7 @@ def make_comma_delim(expr):
     return hl.literal(',').join(hl.map(hl.str, expr))
 
 
-def process_mt_for_flat_file_analysis(mt):
+def process_mt_for_flat_file_analysis(mt, skip_vep):
     """ 
     Function to format the MT into high-yield fields used for downstream analysis.
     
@@ -1969,21 +1969,22 @@ def process_mt_for_flat_file_analysis(mt):
     or have a variant that was filtered. This way the set of true zeros can be obtained
     efficiently as the set of samples not present in this dataset.
     """
-    mt = mt.annotate_rows(ancestral = mt.vep.ancestral, 
-                          most_severe_csq=mt.vep.most_severe_consequence
-                          ).select_globals(
-                          ).select_rows('rsid', 'common_low_heteroplasmy', 'filters', 
-                                        'hap_defining_variant', 'pon_mt_trna_prediction',
-                                        'pon_ml_probability_of_pathogenicity','mitotip_score',
-                                        'mitotip_trna_prediction','region', 'variant_context',
-                                        'ancestral', 'most_severe_csq', 'dp_mean', 'mq_mean',
-                                        'tlod_mean', 'AF_hom', 'AF_het', 'AC_hom', 'AC_het', 'max_hl',
-                                        'excluded_AC'
-                          ).select_cols('batch', 'contamination', 'freemix_percentage', 
-                                        'contam_high_het', 'freemix_percentage_imp',
-                                        'major_haplogroup', 'hap', 'wgs_median_coverage',
-                                        'mt_mean_coverage', 'mito_cn', 'age', 'pop', 
-                                        'over_85_mean', 'over_85_count')
+    base_row_set = ['rsid', 'common_low_heteroplasmy', 'filters', 
+                    'hap_defining_variant', 'pon_mt_trna_prediction',
+                    'pon_ml_probability_of_pathogenicity','mitotip_score',
+                    'mitotip_trna_prediction','region', 'variant_context',
+                    'dp_mean', 'mq_mean', 'tlod_mean', 'AF_hom', 'AF_het', 
+                    'AC_hom', 'AC_het', 'max_hl','excluded_AC']
+    if not skip_vep:
+        mt = mt.annotate_rows(ancestral = mt.vep.ancestral, 
+                              most_severe_csq=mt.vep.most_severe_consequence)
+        base_row_set = base_row_set + ['ancestral', 'most_severe_csq']
+    mt = mt.select_globals().select_rows(*base_row_set
+                           ).select_cols('batch', 'contamination', 'freemix_percentage', 
+                                         'contam_high_het', 'freemix_percentage_imp',
+                                         'major_haplogroup', 'hap', 'wgs_median_coverage',
+                                         'mt_mean_coverage', 'mito_cn', 'age', 'pop', 
+                                         'over_85_mean', 'over_85_count')
     ht = mt.filter_entries(hl.is_missing(mt.HL) | (mt.HL > 0)).entries()
 
     # there should not be any empty filters
@@ -2231,7 +2232,7 @@ def main(args):  # noqa: D103
         )
 
     logger.info('Writing variants flat file for internal use...')
-    ht_for_output = process_mt_for_flat_file_analysis(mt)
+    ht_for_output = process_mt_for_flat_file_analysis(mt, args.fully_skip_vep)
     ht_for_output.export(annotated_mt_path.replace('.mt','_processed_flat.tsv.bgz'))
 
     logger.info("Writing ht...")

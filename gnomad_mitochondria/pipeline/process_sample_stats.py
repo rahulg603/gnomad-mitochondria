@@ -12,8 +12,8 @@ parser.add_argument('--out', required=True, help='gs:// path for filtered sample
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    stat_ht = hl.import_table(args.sample_stats, impute=True, key='s')
-    contamination_ht = hl.import_table(args.contamination_drop, impute=True, key='s')
+    stat_ht = hl.import_table(args.sample_stats, impute=True, key='s', types={'s':hl.tstr})
+    contamination_ht = hl.import_table(args.contamination_drop, impute=True, key='s', types={'s':hl.tstr})
 
     # confirm counts
     print(f'Loaded sample stats for {str(stat_ht.count())} samples.')
