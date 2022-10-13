@@ -1996,7 +1996,7 @@ def process_mt_for_flat_file_analysis(mt):
         raise ValueError('Any instances of missing HL and missing FT should also be missing DP.')
 
     htf = ht.filter(ht.HL == 0)
-    if htf.aggregate_entries(hl.agg.count_where(htf.FT != {'PASS'})) > 0:
+    if htf.aggregate(hl.agg.count_where(htf.FT != {'PASS'})) > 0:
         raise ValueError('No entries with HL = 0 should have failed a genotype filter.')
     
     # thus any records with DP > 100 and missing HL should have a reason for failure
