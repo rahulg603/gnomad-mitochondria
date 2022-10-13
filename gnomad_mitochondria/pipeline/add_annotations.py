@@ -1992,8 +1992,8 @@ def process_mt_for_flat_file_analysis(mt):
     
     # there may be HL that are missing a call but do not have a reason for failure; these should have dp < 100
     htf = ht.filter(hl.is_missing(ht.HL) & hl.is_missing(ht.FT))
-    if htf.aggregate(hl.agg.max(htf.DP)) > 100:
-        raise ValueError('Any instances of missing HL and missing FT should occur below DP 100.')
+    if htf.aggregate(hl.agg.any(hl.is_defined(htf.DP))):
+        raise ValueError('Any instances of missing HL and missing FT should also be missing DP.')
 
     htf = ht.filter(ht.HL == 0)
     if htf.aggregate_entries(hl.agg.count_where(htf.FT != {'PASS'})) > 0:
