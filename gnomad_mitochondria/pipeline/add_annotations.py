@@ -731,13 +731,6 @@ def add_annotations_by_hap_and_pop(input_mt: hl.MatrixTable, output_dir, overwri
     ]
     for_annot = {re.sub("pre_", "", i): standardize_haps(input_mt, i, sorted(list_hap_order)) for i in pre_hap_annotation_labels_1}
     input_mt = input_mt.annotate_rows(**for_annot)
-    # for i in pre_hap_annotation_labels:
-    #     final_annotation = re.sub(
-    #         "pre_", "", i
-    #     )  # remove "pre" prefix for final annotations
-    #     input_mt = input_mt.annotate_rows(
-    #         **{final_annotation: standardize_haps(input_mt, i, sorted(list_hap_order))}
-    #     )
     input_mt = input_mt.checkpoint(f"{output_dir}/temp3.mt", overwrite=overwrite)
 
     pre_hap_annotation_labels_2 = [
@@ -1993,7 +1986,19 @@ def process_mt_for_flat_file_analysis(mt):
                                         'over_85_mean', 'over_85_count')
     ht = mt.filter_entries(hl.is_missing(mt.HL) | (mt.HL > 0)).entries()
 
-    # there may be genotypes that are missing a call but do not have a reason for failure; these should have dp < 100
+    # there should not be any empty filters
+    if ht.aggregate(hl.agg.count_where(hl.len(ht.FT) == 0)) > 0:
+        raise ValueError('There should be no empty FT entries.')
+    
+    # there may be HL that are missing a call but do not have a reason for failure; these should have dp < 100
+    htf = ht.filter(hl.is_missing(ht.HL) & hl.is_missing(ht.FT))
+    if htf.aggregate(hl.agg.max(htf.DP)) > 100:
+        raise ValueError('Any instances of missing HL and missing FT should occur below DP 100.')
+
+    htf = ht.filter(ht.HL == 0)
+    if htf.aggregate_entries(hl.agg.count_where(htf.FT != {'PASS'})) > 0:
+        raise ValueError('No entries with HL = 0 should have failed a genotype filter.')
+    
     # thus any records with DP > 100 and missing HL should have a reason for failure
     htf = ht.filter(ht.DP > 100)
     if htf.aggregate(hl.agg.count_where(hl.is_missing(htf.FT))) > 0:
@@ -2161,6 +2166,10 @@ def main(args):  # noqa: D103
         # NOTE: at this stage there should still be no instances of hl.len(FT) == 0. Missing FT implies HL not called.
         if mt.aggregate_entries(hl.agg.count_where(hl.len(mt.FT) == 0)) > 0:
             raise ValueError('Before filtering genotypes, there should be no entries with FT of length 0.')
+        # NOTE: anything with HL == 0 should have no genotype filters
+        mtf = mt.filter_entries(mt.HL == 0)
+        if mtf.aggregate_entries(hl.agg.count_where(mtf.FT != {'PASS'})) > 0:
+            raise ValueError('No entries with HL = 0 should have failed a genotype filter.')
         # NOTE: all missing HL entries have missing FT. These are entries with low DP so cannot be called hom ref.
         mtf = mt.filter_entries(hl.is_missing(mt.FT))
         if mtf.aggregate_entries(hl.agg.count_where(hl.is_defined(mtf.HL))) > 0:
