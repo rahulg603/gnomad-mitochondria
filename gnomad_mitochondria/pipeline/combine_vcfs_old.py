@@ -1,10 +1,11 @@
 import argparse
-from curses import pair_content
 import logging
 import math
 import os
 
 import hail as hl
+hl._set_flags(no_whole_stage_codegen='1')
+from hail.utils.java import info
 from typing import Dict
 
 META_DICT = {
@@ -39,6 +40,13 @@ logging.basicConfig(
 logger = logging.getLogger("combine_mitochondria_vcfs_into_mt")
 logger.setLevel(logging.INFO)
 
+if int(hl.version().split('-')[0].split('.')[2]) >= 75: # only use this if using hail 0.2.75 or greater
+    logger.info("Setting hail flag to avoid array index out of bounds error...")
+    # Setting this flag isn't generally recommended, but is needed (since at least Hail version 0.2.75) to avoid an array index out of bounds error until changes are made in future versions of Hail
+    # TODO: reassess if this flag is still needed for future versions of Hail
+    hl._set_flags(no_whole_stage_codegen="1")
+
+
 def collect_vcf_paths(
     participant_data: str, vcf_col_name: str, participants_to_subset: str = None,
 ) -> Dict[str, str]:
@@ -51,13 +59,13 @@ def collect_vcf_paths(
         - 's': sample name
         - path to the Mutect2 VCF output, where name of this column is supplied to the `vcf_col_name` parameter
 
-    :param participant_data: Participant data (a ht)
+    :param participant_data: Participant data (the downloaded data tab from Terra)
     :param vcf_col_name: Name of column that contains VCF output
     :param participants_to_subset: Path to file of participant_ids to which the data should be subset
     :return: Dictionary with sample name as key and path to VCF as value
     """
     vcf_paths = {}
-    # Load in data
+    # Load in data from Terra
     participant_ht = hl.import_table(participant_data)
 
     # Remove participants that don't have VCF output
@@ -83,7 +91,7 @@ def collect_vcf_paths(
     return vcf_paths
 
 
-def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, prefix: str) -> hl.MatrixTable:
+def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int) -> hl.MatrixTable:
     """
     Hierarchically join together MatrixTables in the provided list.
 
@@ -98,13 +106,13 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, prefix: str) 
     while len(staging) > 1:
         # Calculate the number of jobs to run based on the chunk size
         n_jobs = int(math.ceil(len(staging) / chunk_size))
-        hl.utils.java.info(f"multi_way_union_mts: stage {stage}: {n_jobs} total jobs")
+        info(f"multi_way_union_mts: stage {stage}: {n_jobs} total jobs")
         next_stage = []
 
         for i in range(n_jobs):
             # Grab just the tables for the given job
             to_merge = staging[chunk_size * i : chunk_size * (i + 1)]
-            hl.utils.java.info(
+            info(
                 f"multi_way_union_mts: stage {stage} / job {i}: merging {len(to_merge)} inputs"
             )
 
@@ -134,10 +142,10 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, prefix: str) 
 
             next_stage.append(
                 merged.checkpoint(
-                    os.path.join(temp_dir, f"{prefix}stage_{stage}_job_{i}.ht"), overwrite=True
+                    os.path.join(temp_dir, f"stage_{stage}_job_{i}.ht"), overwrite=True
                 )
             )
-        hl.utils.java.info(f"Completed stage {stage}")
+        info(f"Completed stage {stage}")
         stage += 1
         staging.clear()
         staging.extend(next_stage)
@@ -151,7 +159,7 @@ def multi_way_union_mts(mts: list, temp_dir: str, chunk_size: int, prefix: str) 
 
 
 def join_mitochondria_vcfs_into_mt(
-    vcf_paths: Dict[str, str], temp_dir: str, chunk_size: int = 100, include_extra_v2_fields: bool = False, num_merges: int = 1
+    vcf_paths: Dict[str, str], temp_dir: str, chunk_size: int = 100, include_extra_v2_fields: bool = False
 ) -> hl.MatrixTable:
     """
     Reformat and join individual mitochondrial VCFs into one MatrixTable.
@@ -162,70 +170,51 @@ def join_mitochondria_vcfs_into_mt(
     :param include_extra_v2_fields: Includes extra fields important for analysis of v2.1 source MTs
     :return: Joined MatrixTable of samples given in vcf_paths dictionary
     """
-    list_paths = list(vcf_paths.items())
-    list_paths.sort(key=lambda y: y[0])
-    if num_merges == 1:
-        vcf_path_list = [list_paths]
-    else:
-        vcf_path_list = chunks(list_paths, len(list_paths) // num_merges)
-    mt_list_subsets = []
-    for subset_number, subset in enumerate(vcf_path_list):
-        print(f'Importing subset {str(subset_number)}...')
-        this_prefix = f'variant_merging_subset{str(subset_number)}_{str(num_merges)}subsets/'
-        this_subset_mt = os.path.join(temp_dir, f"{this_prefix}final_merged.mt")
-        if hl.hadoop_is_file(f'{this_subset_mt}/_SUCCESS'):
-            mt_list_subsets.append(hl.read_matrix_table(this_subset_mt))
-            print(f'Subset {str(subset_number)} already processed and imported with {str(mt_list_subsets[len(mt_list_subsets)-1].count_cols())} samples.')
+    mt_list = []
+    idx = 0
+    for sample, vcf_path in vcf_paths.items():
+        try:
+            mt = hl.import_vcf(vcf_path, reference_genome="GRCh38")
+        except Exception as e:
+            raise ValueError(
+                f"vcf path {vcf_path} does not exist for sample {sample}"
+            ) from e
+
+        idx+=1
+        # Because the vcfs are split, there is only one AF value, although misinterpreted as an array because Number=A in VCF header
+        # Second value of MMQ is the value of the mapping quality for the alternate allele
+        # Add FT annotation for sample genotype filters (pull these from filters annotations of the single-sample VCFs)
+        if include_extra_v2_fields:
+            fields_of_interest = {'OriginalSelfRefAlleles':'array<str>', 'SwappedFieldIDs':'str'}
+            if 'GT' in mt.entry:
+                mt = mt.drop('GT')
+            for x, item_type in fields_of_interest.items():
+                if x not in mt.entry:
+                    mt = mt.annotate_entries(**{x: hl.missing(item_type)})
+            mt = mt.select_entries("DP", "AD", *list(fields_of_interest.keys()), HL=mt.AF[0])
+            META_DICT['format'].update({'AD': {"Description": "Allelic depth of REF and ALT", "Number": "R", "Type": "Integer"},
+                                        'OriginalSelfRefAlleles': {'Description':'Original self-reference alleles (only if alleles were changed in Liftover repair pipeline)', 'Number':'R', 'Type':'String'},
+                                        'SwappedFieldIDs': {'Description':'Fields remapped during liftover (only if alleles were changed in Liftover repair pipeline)', 'Number':'1', 'Type':'String'}})
         else:
-            mt_list = []
-            idx = 0
-            for s, vcf_path in subset:
-                idx+=1
-                try:
-                    mt = hl.import_vcf(vcf_path, reference_genome="GRCh38")
-                except Exception as e:
-                    raise ValueError(
-                        f"vcf path {vcf_path} does not exist for sample {s}"
-                    ) from e
+            mt = mt.select_entries("DP", HL=mt.AF[0])
+        mt = mt.annotate_entries(
+            MQ=hl.float(mt.info["MMQ"][1]),
+            TLOD=mt.info["TLOD"][0],
+            FT=hl.if_else(hl.len(mt.filters) == 0, {"PASS"}, mt.filters),
+        )
+        # Use GRCh37 reference as most external resources added in downstream scripts use GRCh37 contig names
+        # (although note that the actual sequences of the mitochondria in both GRCh37 and GRCh38 are the same)
+        mt = mt.key_rows_by(
+            locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),
+            alleles=mt.alleles,
+        )
+        mt = mt.key_cols_by(s=sample)
+        mt = mt.select_rows()
+        mt_list.append(mt)
+        if idx % 500 == 0:
+            logger.info(f"Imported sample {str(idx)}...")
 
-                # Because the vcfs are split, there is only one AF value, although misinterpreted as an array because Number=A in VCF header
-                # Second value of MMQ is the value of the mapping quality for the alternate allele
-                # Add FT annotation for sample genotype filters (pull these from filters annotations of the single-sample VCFs)
-                if include_extra_v2_fields:
-                    fields_of_interest = {'OriginalSelfRefAlleles':'array<str>', 'SwappedFieldIDs':'str'}
-                    if 'GT' in mt.entry:
-                        mt = mt.drop('GT')
-                    for x, item_type in fields_of_interest.items():
-                        if x not in mt.entry:
-                            mt = mt.annotate_entries(**{x: hl.missing(item_type)})
-                    mt = mt.select_entries("DP", "AD", *list(fields_of_interest.keys()), "HL", "MQ", "TLOD", "FT")
-                    META_DICT['format'].update({'AD': {"Description": "Allelic depth of REF and ALT", "Number": "R", "Type": "Integer"},
-                                                'OriginalSelfRefAlleles': {'Description':'Original self-reference alleles (only if alleles were changed in Liftover repair pipeline)', 'Number':'R', 'Type':'String'},
-                                                'SwappedFieldIDs': {'Description':'Fields remapped during liftover (only if alleles were changed in Liftover repair pipeline)', 'Number':'1', 'Type':'String'}})
-                else:
-                    mt = mt.select_entries("DP", "HL", "MQ", "TLOD", "FT")
-                # Use GRCh37 reference as most external resources added in downstream scripts use GRCh37 contig names
-                # (although note that the actual sequences of the mitochondria in both GRCh37 and GRCh38 are the same)
-                mt = mt.annotate_entries(FT = hl.set(mt.FT))
-                mt = mt.key_rows_by(
-                    locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),
-                    alleles=mt.alleles,
-                )
-                mt = mt.key_cols_by('s')
-                mt = mt.select_rows()
-                mt_list.append(mt)
-                if idx % 20 == 0:
-                    logger.info(f"Imported sample {str(idx)}...")
-
-            combined_mt_this = multi_way_union_mts(mt_list, temp_dir, chunk_size, prefix=this_prefix)
-            combined_mt_this = combined_mt_this.repartition(args.n_final_partitions // num_merges).checkpoint(this_subset_mt, overwrite=True)
-            mt_list_subsets.append(combined_mt_this)
-    
-    if num_merges == 1:
-        combined_mt = mt_list_subsets[0]
-    else:
-        merged_prefix = f'variant_merging_final_{str(num_merges)}subsets/'
-        combined_mt = multi_way_union_mts(mt_list_subsets, temp_dir, chunk_size, prefix=merged_prefix)
+    combined_mt = multi_way_union_mts(mt_list, temp_dir, chunk_size)
 
     return combined_mt
 
@@ -374,42 +363,19 @@ def apply_mito_artifact_filter(
     return mt
 
 
-def chunks(items, binsize):
-    lst = []
-    for item in items:
-        lst.append(item)
-        if len(lst) == binsize:
-            yield lst
-            lst = []
-    if len(lst) > 0:
-        yield lst
-
-
 def main(args):  # noqa: D103
-    # start SQL session and initialize constants
-    participant_data = args.input_tsv
+    participant_data = args.participant_data
     coverage_mt_path = args.coverage_mt_path
-    output_bucket = args.output_bucket
-    temp_dir = args.temp_dir
-    participants_to_subset = None if args.participants_to_subset is None else f'gs://{args.participants_to_subset}'
-    chunk_size = args.chunk_size
+    vcf_col_name = args.vcf_col_name
     artifact_prone_sites_path = args.artifact_prone_sites_path
-    artifact_prone_sites_reference = args.artifact_prone_sites_reference
-    include_extra_v2_fields = args.include_extra_v2_fields
+    output_bucket = args.output_bucket
     file_name = args.file_name
     minimum_homref_coverage = args.minimum_homref_coverage
-    num_merges = args.split_merging
-    vcf_col_name = 'vcf'
-    hl.init(tmp_dir=temp_dir)
-
-    if int(hl.version().split('-')[0].split('.')[2]) >= 75: # only use this if using hail 0.2.75 or greater
-        logger.info("Setting hail flag to avoid array index out of bounds error...")
-        # Setting this flag isn't generally recommended, but is needed (since at least Hail version 0.2.75) to avoid an array index out of bounds error until changes are made in future versions of Hail
-        # TODO: reassess if this flag is still needed for future versions of Hail
-        hl._set_flags(no_whole_stage_codegen="1")
+    chunk_size = args.chunk_size
+    artifact_prone_sites_reference = args.artifact_prone_sites_reference
+    include_extra_v2_fields = args.include_extra_v2_fields
 
     output_path_mt = f"{output_bucket}/raw_combined.mt"
-    output_path_mt_2 = f"{output_bucket}/raw_combined_2.mt"
 
     if args.overwrite == False and hl.hadoop_exists(output_path_mt):
         logger.warning(
@@ -419,45 +385,35 @@ def main(args):  # noqa: D103
 
     logger.info("Collecting VCF paths for samples to subset...")
     vcf_paths = collect_vcf_paths(
-        participant_data, vcf_col_name, participants_to_subset
+        participant_data, vcf_col_name, args.participants_to_subset
     )
 
     logger.info("Combining VCFs...")
-    combined_mt = join_mitochondria_vcfs_into_mt(vcf_paths, temp_dir, chunk_size, include_extra_v2_fields, num_merges)
-    combined_mt = combined_mt.repartition(100).checkpoint(output_path_mt, overwrite=args.overwrite)
+    combined_mt = join_mitochondria_vcfs_into_mt(vcf_paths, args.temp_dir, chunk_size, include_extra_v2_fields)
+    combined_mt = combined_mt.checkpoint(output_path_mt, overwrite=args.overwrite)
 
     logger.info("Removing select sample-level filters...")
     combined_mt = remove_genotype_filters(combined_mt)
 
     logger.info("Determining homoplasmic reference sites...")
-    combined_mt = determine_hom_refs(combined_mt, coverage_mt_path, minimum_homref_coverage)
-    combined_mt = combined_mt.checkpoint(output_path_mt_2, overwrite=args.overwrite)
+    combined_mt = determine_hom_refs(
+        combined_mt, coverage_mt_path, minimum_homref_coverage
+    )
 
     logger.info("Applying artifact_prone_site fiter...")
     combined_mt = apply_mito_artifact_filter(combined_mt, artifact_prone_sites_path, artifact_prone_sites_reference)
 
-    logger.info("Writing combined MT...")
+    logger.info("Writing combined MT and VCF...")
     # Set the file names for output files
     out_vcf = f"{output_bucket}/{file_name}.vcf.bgz"
     out_mt = f"{output_bucket}/{file_name}.mt"
-    out_tsv = f"{output_bucket}/{file_name}.tsv.bgz"
 
-    combined_mt = combined_mt.repartition(args.n_final_partitions).checkpoint(out_mt, overwrite=args.overwrite)
-
-    logger.info("Writing trimmed variants table...")
-    ht_for_tsv = combined_mt.entries()
-    #ht_for_tsv = ht_for_tsv.annotate(HL=hl.if_else(hl.is_defined(ht_for_tsv['HL']), ht_for_tsv['HL'], 0))
-    #ht_for_tsv = ht_for_tsv.annotate(FT=hl.if_else(ht_for_tsv['HL']==0, hl.missing('set<str>'), ht_for_tsv['FT']))
-    ht_for_tsv = ht_for_tsv.filter(hl.is_missing(ht_for_tsv.HL) | (ht_for_tsv.HL > 0))
-    ht_for_tsv.repartition(50).export(out_tsv)
-
-    logger.info("Writing combined VCF...")
+    combined_mt = combined_mt.checkpoint(out_mt, overwrite=args.overwrite)
     # For the VCF output, join FT values by semicolon
     combined_mt = combined_mt.annotate_entries(
         FT=hl.str(";").join(hl.array(combined_mt.FT))
     )
-    hl.export_vcf(combined_mt.repartition(100), out_vcf, metadata=META_DICT)
-
+    hl.export_vcf(combined_mt, out_vcf, metadata=META_DICT)
 
 
 if __name__ == "__main__":
@@ -465,9 +421,9 @@ if __name__ == "__main__":
         description="This script combines individual mitochondria VCF files into one MatrixTable, determines homoplasmic reference sites, and applies an artifact_prone_site filter"
     )
     p.add_argument(
-        "-i",
-        "--input-tsv",
-        help="Input tsv with paths to vcf file.",
+        "-p",
+        "--participant-data",
+        help="Participant data (the downloaded data tab from Terra), should be a tab-delimited file with at minimum columns for 'entity:participant_id' (sample name with prohibited characters replaced with underscores), 's' (sample name), and VCF output (path to the Mutect2 VCF output, where the name of this column is supplied to the `vcf_col_name` parameter)",
         required=True,
     )
     p.add_argument(
@@ -532,12 +488,6 @@ if __name__ == "__main__":
     )
     p.add_argument("--overwrite", help="Overwrites existing files", action="store_true")
     p.add_argument("--include-extra-v2-fields", help="Loads in exåtra fields from MitochondriaPipeline v2.1, specifically AD, OriginalSelfRefAlleles, and SwappedFieldIDs. If missing will fill with missing.", action="store_true")
-    p.add_argument(
-        "--n-final-partitions", type=int, default=1000, help='Number of partitions for final mt.'
-    )
-    p.add_argument(
-        '--split-merging', type=int, default=1, help='Will split the merging into this many jobs which will be merged at the end. Uses the same order each time such that if it fails we can read from previous files.'
-    )
 
     args = p.parse_args()
 
