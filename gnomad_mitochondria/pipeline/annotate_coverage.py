@@ -252,7 +252,8 @@ def main(args):  # noqa: D103
                             mt = mt.drop("target")
                         else:
                             mt = mt.key_rows_by(*["chrom", "pos", "target"])
-                        mt = mt.key_cols_by().rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
+                        mt = mt.key_cols_by().annotate_cols(col_id = s)
+                        mt = mt.rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
 
                         mt_list.append(mt)
                         if idx % 10 == 0:
@@ -281,7 +282,8 @@ def main(args):  # noqa: D103
                 mt = mt.drop("target")
             else:
                 mt = mt.key_rows_by(*["chrom", "pos", "target"])
-            mt = mt.key_cols_by().rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
+            mt = mt.key_cols_by().annotate_cols(col_id = s)
+            mt = mt.rename({"x": "coverage", 'col_id':'s'}).key_cols_by('s')
 
             mt_list.append(mt)
             if idx % 10 == 0:
