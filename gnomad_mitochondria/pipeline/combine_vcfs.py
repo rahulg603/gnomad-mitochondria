@@ -198,21 +198,26 @@ def join_mitochondria_vcfs_into_mt(
                     for x, item_type in fields_of_interest.items():
                         if x not in mt.entry:
                             mt = mt.annotate_entries(**{x: hl.missing(item_type)})
-                    mt = mt.select_entries("DP", "AD", *list(fields_of_interest.keys()), "HL", "MQ", "TLOD", "FT")
+                    mt = mt.select_entries("DP", "AD", *list(fields_of_interest.keys()), HL=mt.AF[0])
                     META_DICT['format'].update({'AD': {"Description": "Allelic depth of REF and ALT", "Number": "R", "Type": "Integer"},
                                                 'OriginalSelfRefAlleles': {'Description':'Original self-reference alleles (only if alleles were changed in Liftover repair pipeline)', 'Number':'R', 'Type':'String'},
                                                 'SwappedFieldIDs': {'Description':'Fields remapped during liftover (only if alleles were changed in Liftover repair pipeline)', 'Number':'1', 'Type':'String'}})
                 else:
-                    mt = mt.select_entries("DP", "HL", "MQ", "TLOD", "FT")
+                    mt = mt.select_entries("DP", HL=mt.AF[0])
                 # Use GRCh37 reference as most external resources added in downstream scripts use GRCh37 contig names
                 # (although note that the actual sequences of the mitochondria in both GRCh37 and GRCh38 are the same)
-                mt = mt.annotate_entries(FT = hl.set(mt.FT))
+                mt = mt.annotate_entries(
+                    MQ=hl.float(mt.info["MMQ"][1]),
+                    TLOD=mt.info["TLOD"][0],
+                    FT=hl.if_else(hl.len(mt.filters) == 0, {"PASS"}, mt.filters),
+                )
                 mt = mt.key_rows_by(
                     locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),
                     alleles=mt.alleles,
                 )
-                mt = mt.key_cols_by('s')
+                mt = mt.key_cols_by(s=s)
                 mt = mt.select_rows()
+                mt.entries().show()
                 mt_list.append(mt)
                 if idx % 20 == 0:
                     logger.info(f"Imported sample {str(idx)}...")
