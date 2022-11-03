@@ -1979,8 +1979,10 @@ def process_mt_for_flat_file_analysis(mt, skip_vep):
         mt = mt.annotate_rows(ancestral = mt.vep.ancestral, 
                               most_severe_csq=mt.vep.most_severe_consequence)
         base_row_set = base_row_set + ['ancestral', 'most_severe_csq']
+    base_col_set = ['batch']
+    base_col_set = [x for x in base_col_set if x in mt.col]
     mt = mt.select_globals().select_rows(*base_row_set
-                           ).select_cols('batch', 'contamination', 'freemix_percentage', 
+                           ).select_cols(*base_col_set, 'contamination', 'freemix_percentage', 
                                          'contam_high_het', 'freemix_percentage_imp',
                                          'major_haplogroup', 'hap', 'wgs_median_coverage',
                                          'mt_mean_coverage', 'mito_cn', 'age', 'pop', 
