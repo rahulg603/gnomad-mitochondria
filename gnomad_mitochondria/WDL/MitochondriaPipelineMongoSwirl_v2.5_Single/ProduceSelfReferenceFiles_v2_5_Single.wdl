@@ -1,7 +1,7 @@
 version 1.0
 
-import "https://personal.broadinstitute.org/rahul/MitochondriaPipelineMongoSwirl_v2.5_Single/LiftoverTools_v2_5_Single.wdl" as LiftoverTools_Single
-import "https://personal.broadinstitute.org/rahul/MitochondriaPipelineMongoSwirl_v2.5_Single/MongoTasks_v2_5_Single.wdl" as MongoTasks_Single
+import "https://raw.githubusercontent.com/rahulg603/gnomad-mitochondria/main/gnomad_mitochondria/WDL/MitochondriaPipelineMongoSwirl_v2.5_Single/LiftoverTools_v2_5_Single.wdl" as LiftoverTools_Single
+import "https://raw.githubusercontent.com/rahulg603/gnomad-mitochondria/main/gnomad_mitochondria/WDL/MitochondriaPipelineMongoSwirl_v2.5_Single/MongoTasks_v2_5_Single.wdl" as MongoTasks_Single
 
 workflow ProduceSelfReferenceFiles {
   # Running bcftools consensus when an interval file was used upstream to subset the genome

@@ -1,6 +1,6 @@
 version 1.0
 
-import "https://personal.broadinstitute.org/rahul/MitochondriaPipelineMongoSwirl_v2.5_Single/fullMitoPipeline_v2_5_Single.wdl" as MitochondriaPipeline_v2_5
+import "https://raw.githubusercontent.com/rahulg603/gnomad-mitochondria/main/gnomad_mitochondria/WDL/MitochondriaPipelineMongoSwirl_v2.5_Single/fullMitoPipeline_v2_5_Single.wdl" as MitochondriaPipeline_v2_5
 
 workflow MitochondriaPipelineWrapper {
 
