@@ -320,11 +320,12 @@ def get_genotypes(AF_cutoff=0.001, n_partitions=5000, overwrite=False):
             mt = hl.read_matrix_table(os.getenv("WGS_HAIL_STORAGE_PATH"))
             mt = mt.select_entries('GT')
 
-            bi = mt.filter_rows(hl.len(mt.alleles) == 2)
-            bi = bi.annotate_rows(a_index=1, was_split=False)
-            multi = mt.filter_rows(hl.len(mt.alleles) > 2)
-            split = hl.split_multi_hts(multi, permit_shuffle=False)
-            mt = split.union_rows(bi)
+            mt = hl.split_multi_hts(mt, permit_shuffle=False)
+            #bi = mt.filter_rows(hl.len(mt.alleles) == 2)
+            #bi = bi.annotate_rows(a_index=1, was_split=False)
+            #multi = mt.filter_rows(hl.len(mt.alleles) > 2)
+            #split = hl.split_multi_hts(multi, permit_shuffle=False)
+            #mt = split.union_rows(bi)
 
             mt = mt.annotate_rows(MAF = mt.info.AF[mt.a_index-1])
             mt = mt.filter_rows(hl.min([mt.MAF, 1-mt.MAF]) > AF_cutoff, keep = True)
