@@ -203,56 +203,57 @@ def filter_to_clumped_variants(mt, pop):
     return mt.filter_rows(mt.include_in_pca_by_anc[popidx])
 
 
-# import full MT
-# this function will produce this PCA set if it isn't found
-mt = import_aou_gt_for_pca(overwrite=False)
-mt = mt.annotate_cols(related = ~mt.related) # band aid relatedness fix
-mt = remove_ancestry_outliers(mt, iteration)
-iter_suff = make_iteration_suffix(iteration)
+if __name__ == '__main__':
+    # import full MT
+    # this function will produce this PCA set if it isn't found
+    mt = import_aou_gt_for_pca(overwrite=False)
+    mt = mt.annotate_cols(related = ~mt.related) # band aid relatedness fix
+    mt = remove_ancestry_outliers(mt, iteration)
+    iter_suff = make_iteration_suffix(iteration)
 
-# for each population, remove related samples, run PCA, and then project unrelated samples onto PCs
-hts = []
-for pop in POPS:
-    related_prefix = f'{PCA_DIR}{pop}_results_related_gnomadqc{iter_suff}'
-    unrelated_prefix = f'{PCA_DIR}{pop}_results_unrelated_gnomadqc{iter_suff}'
+    # for each population, remove related samples, run PCA, and then project unrelated samples onto PCs
+    hts = []
+    for pop in POPS:
+        related_prefix = f'{PCA_DIR}{pop}_results_related_gnomadqc{iter_suff}'
+        unrelated_prefix = f'{PCA_DIR}{pop}_results_unrelated_gnomadqc{iter_suff}'
 
-    file_found = hl.hadoop_exists(f'{related_prefix}.scores_projected.ht/_SUCCESS') and \
-        hl.hadoop_exists(f'{unrelated_prefix}.scores.ht/_SUCCESS')
-    
-    if global_overwrite or not file_found:
-        mtf = mt.filter_cols(mt.pop == pop)
-        mtf = filter_to_clumped_variants(mtf, pop)
-        mtf_unrel = mtf.filter_cols(~mtf.related)
-        mtf_rel = mtf.filter_cols(mtf.related)
-        print(f'For pop {pop}, {str(mtf_unrel.count_cols())} unrelated samples found with {str(mtf_unrel.count_rows())} variants.')
-        run_pca(mtf_unrel, f'{unrelated_prefix}.', k, True)
+        file_found = hl.hadoop_exists(f'{related_prefix}.scores_projected.ht/_SUCCESS') and \
+            hl.hadoop_exists(f'{unrelated_prefix}.scores.ht/_SUCCESS')
+        
+        if global_overwrite or not file_found:
+            mtf = mt.filter_cols(mt.pop == pop)
+            mtf = filter_to_clumped_variants(mtf, pop)
+            mtf_unrel = mtf.filter_cols(~mtf.related)
+            mtf_rel = mtf.filter_cols(mtf.related)
+            print(f'For pop {pop}, {str(mtf_unrel.count_cols())} unrelated samples found with {str(mtf_unrel.count_rows())} variants.')
+            run_pca(mtf_unrel, f'{unrelated_prefix}.', k, True)
 
-        pca_loadings = hl.read_table(f'{unrelated_prefix}.loadings.ht')
-        ht = project_individuals(pca_loadings, mtf_rel, k)
-        ht.write(f'{related_prefix}.scores_projected.ht', overwrite=True)
-        hl.read_table(f'{related_prefix}.scores_projected.ht').export(
-            f'{related_prefix}.scores_projected.txt.bgz')
+            pca_loadings = hl.read_table(f'{unrelated_prefix}.loadings.ht')
+            ht = project_individuals(pca_loadings, mtf_rel, k)
+            ht.write(f'{related_prefix}.scores_projected.ht', overwrite=True)
+            hl.read_table(f'{related_prefix}.scores_projected.ht').export(
+                f'{related_prefix}.scores_projected.txt.bgz')
 
-    ht_score_rel = hl.read_table(f'{related_prefix}.scores_projected.ht')
-    hts.append(ht_score_rel.annotate(pop=pop, related=True))
-    ht_score_unrel = hl.read_table(f'{unrelated_prefix}.scores.ht')
-    ht_score_unrel = add_pcs(ht_score_unrel, k)
-    hts.append(ht_score_unrel.annotate(pop=pop, related=False))
+        ht_score_rel = hl.read_table(f'{related_prefix}.scores_projected.ht')
+        hts.append(ht_score_rel.annotate(pop=pop, related=True))
+        ht_score_unrel = hl.read_table(f'{unrelated_prefix}.scores.ht')
+        ht_score_unrel = add_pcs(ht_score_unrel, k)
+        hts.append(ht_score_unrel.annotate(pop=pop, related=False))
 
-# merged table now contains PCs, pop, and relatedness information
-ht = hts[0].union(*hts[1:])
-ht.write(get_custom_pc_path(iteration), overwrite=True)
+    # merged table now contains PCs, pop, and relatedness information
+    ht = hts[0].union(*hts[1:])
+    ht.write(get_custom_pc_path(iteration), overwrite=True)
 
-# filtering iteration 0
-# EUR: 34576 variants
-# AMR: 48101 variants
-# AFR: 65611 variants
-# EAS: 27044 variants
-# SAS: 46434 variants
+    # filtering iteration 0
+    # EUR: 34576 variants
+    # AMR: 48101 variants
+    # AFR: 65611 variants
+    # EAS: 27044 variants
+    # SAS: 46434 variants
 
-# filtering iteration 1
-# EUR: 34576 variants
-# AMR: 48101 variants
-# AFR: 65611 variants
-# EAS: 27037 variants
-# SAS: 46346 variants
+    # filtering iteration 1
+    # EUR: 34576 variants
+    # AMR: 48101 variants
+    # AFR: 65611 variants
+    # EAS: 27037 variants
+    # SAS: 46346 variants

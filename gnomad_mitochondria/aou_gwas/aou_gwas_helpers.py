@@ -109,7 +109,7 @@ def get_covariates(iteration, overwrite=False, use_custom_pca=False):
                                             impute=True, 
                                             types={"research_id":"tstr","pca_features":hl.tarray(hl.tfloat)},
                                             min_partitions=50)
-            sample_covariates = sample_covariates.annotate(**{f'PC{str(idx+1)}': ancestry_pred[sample_covariates.s].pca_features[idx] for idx in range(0,10)})
+            sample_covariates = sample_covariates.annotate(**{f'PC{str(idx+1)}': ancestry_pred[sample_covariates.s].pca_features[idx] for idx in range(0,16)})
             sample_covariates = sample_covariates.annotate(pop = ancestry_pred[sample_covariates.s].ancestry_pred)
         else:
             ancestry_ht = hl.read_table(get_custom_pc_path(iteration))
@@ -132,10 +132,10 @@ def get_raw_mtdna_callset():
     return mt_pheno_mod
 
 
-def get_case_only_mtdna_callset(num_to_keep = 310):
+def get_case_only_mtdna_callset(num_to_keep=310, overwrite=False):
     """ Here we implement the munging pipeline in Python and Pandas.
     """
-    if hl.hadoop_exists(f"{get_final_case_only_hl_path(num_to_keep, 'ht')}/_SUCCESS"):
+    if hl.hadoop_exists(f"{get_final_case_only_hl_path(num_to_keep, 'ht')}/_SUCCESS") and not overwrite:
         ht = hl.read_table(get_final_case_only_hl_path(num_to_keep, 'ht'))
     
     else:
