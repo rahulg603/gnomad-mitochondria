@@ -359,11 +359,11 @@ def run_regressions(mt, phenos, covars, pass_through, gwas_name, thresh=0, model
     """
     Much of the heavy lifiting for converting the ht to mt is pulled from UKB round 2.
     Performs covariate correction for all elements in the covariates struct.
-    TODO add low-quality filter to variants
     """
     mt_dir = f'{RESULTS_DIR}mt/'
     cutoff = '' if thresh == 0 else f'_filt_prob_{thresh}'
     filename = f'{gwas_name}_gwas_{model}{cutoff}.mt'
+    filename_raw = f'{gwas_name}_gwas_{model}{cutoff}_raw.mt'
     if (not overwrite) & hl.hadoop_exists(mt_dir+filename):
         mt = hl.read_matrix_table(mt_dir+filename)
 
@@ -400,6 +400,20 @@ def run_regressions(mt, phenos, covars, pass_through, gwas_name, thresh=0, model
         ht_res = ht_res.select(*(pass_through + ['entries']))
         mt = ht_res._unlocalize_entries('entries', 'columns', ['phenotype'])
         mt = mt.repartition(n_partition)
+        mt = mt.checkpoint(mt_dir+filename_raw, overwrite=True)
+
+        mt = mt.select_entries(n_complete_samples = mt.n,
+                               AC = mt.sum_x,
+                               ytx = mt.y_transpose_x,
+                               beta = mt.beta,
+                               se = mt.standard_error,
+                               tstat = mt.t_stat,
+                               pval = mt.p_value)
+        mt = mt.annotate_entries(AF = mt.AC / (2 * mt.n_complete_samples))
+        mt = mt.annotate_entries(minor_AF = hl.cond(mt.AF <= 0.5, mt.AF, 1.0-mt.AF),
+                                 minor_AC = hl.cond(mt.AF <= 0.5, mt.AC, (2 * mt.n_complete_samples)-mt.AC))
+        mt = mt.annotate_entries(low_confidence = mt.minor_AC <= 20)
+
         mt = mt.checkpoint(mt_dir+filename, overwrite=True)
     
     return mt
