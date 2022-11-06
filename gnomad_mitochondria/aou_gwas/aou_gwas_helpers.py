@@ -287,7 +287,9 @@ def get_positive_control_phenotypes(sample_covariates, overwrite=False):
 
 
 def apply_irnt(ht, cols):
-
+    # similar to Neale lab round 2 approach:
+    # https://github.com/Nealelab/UK_Biobank_GWAS/blob/master/0.2/irnt.biomarkers.py
+    
     df = ht.select(*cols).to_pandas()
     df.index = df['s']
     df = df.drop('s', axis=1)
@@ -327,6 +329,7 @@ def get_genotypes(AF_cutoff=0.001, n_partitions=5000, overwrite=False):
             #split = hl.split_multi_hts(multi, permit_shuffle=False)
             #mt = split.union_rows(bi)
 
+            # NOTE this is not actually MAF!! this is never an issue because we recompute per-pop
             mt = mt.annotate_rows(MAF = mt.info.AF[mt.a_index-1])
             mt = mt.filter_rows(hl.min([mt.MAF, 1-mt.MAF]) > AF_cutoff, keep = True)
             mt = mt.naive_coalesce(n_partitions*2).checkpoint(f'{GWAS_DIR}filtered_gt_1.mt', overwrite=True)
@@ -356,6 +359,7 @@ def run_regressions(mt, phenos, covars, pass_through, gwas_name, thresh=0, model
     """
     Much of the heavy lifiting for converting the ht to mt is pulled from UKB round 2.
     Performs covariate correction for all elements in the covariates struct.
+    TODO add low-quality filter to variants
     """
     mt_dir = f'{RESULTS_DIR}mt/'
     cutoff = '' if thresh == 0 else f'_filt_prob_{thresh}'
@@ -410,7 +414,7 @@ def export_for_manhattan(mt, phenos, entry_keep, model, suffix, overwrite, inclu
         if include_cols_for_mung:
             extra_cols = ['rsid', 'minor_AF']
         else:
-            extra_cols = ['minor_AF']
+            extra_cols = ['rsid', 'minor_AF']
         extra_cols = [x for x in extra_cols if x in mt.row]
         if overwrite or not hl.hadoop_exists(file_out):
             ht_f = mt.filter_cols(mt.phenotype == pheno).entries().select(*(entry_keep + extra_cols)).repartition(100)
