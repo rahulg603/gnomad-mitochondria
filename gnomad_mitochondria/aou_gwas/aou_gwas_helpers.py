@@ -402,16 +402,16 @@ def run_regressions(mt, phenos, covars, pass_through, gwas_name, thresh=0, model
         mt = mt.repartition(n_partition)
         mt = mt.checkpoint(mt_dir+filename_raw, overwrite=True)
 
-        mt = mt.select_entries(n_complete_samples = mt.n,
+        mt = mt.select_entries(N = mt.n,
                                AC = mt.sum_x,
                                ytx = mt.y_transpose_x,
-                               beta = mt.beta,
-                               se = mt.standard_error,
+                               BETA = mt.beta,
+                               SE = mt.standard_error,
                                tstat = mt.t_stat,
-                               pval = mt.p_value)
-        mt = mt.annotate_entries(AF = mt.AC / (2 * mt.n_complete_samples))
+                               Pvalue = mt.p_value)
+        mt = mt.annotate_entries(AF = mt.AC / (2 * mt.N))
         mt = mt.annotate_entries(minor_AF = hl.cond(mt.AF <= 0.5, mt.AF, 1.0-mt.AF),
-                                 minor_AC = hl.cond(mt.AF <= 0.5, mt.AC, (2 * mt.n_complete_samples)-mt.AC))
+                                 minor_AC = hl.cond(mt.AF <= 0.5, mt.AC, (2 * mt.N)-mt.AC))
         mt = mt.annotate_entries(low_confidence = mt.minor_AC <= 20)
 
         mt = mt.checkpoint(mt_dir+filename, overwrite=True)
@@ -443,6 +443,21 @@ def export_for_manhattan(mt, phenos, entry_keep, model, suffix, overwrite, inclu
                 ht_f = ht_f.annotate(variant = hl.str(ht_f.locus)+ ':' + hl.delimit(ht_f.alleles, ':'))
                 ht_f = ht_f.drop(ht_f.locus, ht_f.alleles, ht_f.phenotype).key_by('variant')
             ht_f.export(file_out)
+
+
+def aou_generate_final_lambdas(mt, suffix, overwrite):
+    mt = mt.annotate_cols(
+        pheno_data=hl.zip(mt.pheno_data, hl.agg.array_agg(
+            lambda ss: hl.agg.filter(~ss.low_confidence,
+                hl.struct(lambda_gc=hl.methods.statgen._lambda_gc_agg(hl.exp(ss.Pvalue)),
+                          n_variants=hl.agg.count_where(hl.is_defined(ss.Pvalue)),
+                          n_sig_variants=hl.agg.count_where(hl.exp(ss.Pvalue) < 5e-8))),
+            mt.summary_stats)).map(lambda x: x[0].annotate(**x[1]))
+    )
+    ht = mt.cols()
+    ht = ht.checkpoint(get_lambdas_path(suffix, 'full', 'ht'), overwrite=overwrite, _read_if_exists=not overwrite)
+    ht.explode('pheno_data').flatten().export(get_lambdas_path(suffix, 'full', 'txt.bgz'))
+    return mt
 
 
 def filter_mt_per_pop_maf(mt, pop, cutoff, overwrite_gt):
