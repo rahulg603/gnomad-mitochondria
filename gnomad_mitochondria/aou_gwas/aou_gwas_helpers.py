@@ -419,16 +419,16 @@ def run_regressions(mt, phenos, covars, pass_through, gwas_name, thresh=0, model
     return mt
 
 
-def export_for_manhattan(mt, phenos, entry_keep, model, suffix, overwrite, include_cols_for_mung):
+def export_for_manhattan(mt, phenos, entry_keep, model, fold, suffix, overwrite, include_cols_for_mung):
     if type(entry_keep) == str:
         entry_keep = [entry_keep]
 
     for pheno in phenos:
-        file_out = f'{GWAS_DIR}/sumstats/{model}/{pheno}{suffix}'
+        file_out = f'{GWAS_DIR}/sumstats/{model}/{fold}/{pheno}{suffix}'
         if include_cols_for_mung:
-            extra_cols = ['rsid', 'minor_AF']
+            extra_cols = ['rsid']
         else:
-            extra_cols = ['rsid', 'minor_AF']
+            extra_cols = ['rsid']
         extra_cols = [x for x in extra_cols if x in mt.row]
         if overwrite or not hl.hadoop_exists(file_out):
             ht_f = mt.filter_cols(mt.phenotype == pheno).entries().select(*(entry_keep + extra_cols)).repartition(100)
@@ -449,9 +449,9 @@ def aou_generate_final_lambdas(mt, suffix, overwrite):
     mt = mt.annotate_cols(
         pheno_data=hl.zip(mt.pheno_data, hl.agg.array_agg(
             lambda ss: hl.agg.filter(~ss.low_confidence,
-                hl.struct(lambda_gc=hl.methods.statgen._lambda_gc_agg(hl.exp(ss.Pvalue)),
+                hl.struct(lambda_gc=hl.methods.statgen._lambda_gc_agg(ss.Pvalue),
                           n_variants=hl.agg.count_where(hl.is_defined(ss.Pvalue)),
-                          n_sig_variants=hl.agg.count_where(hl.exp(ss.Pvalue) < 5e-8))),
+                          n_sig_variants=hl.agg.count_where(ss.Pvalue < 5e-8))),
             mt.summary_stats)).map(lambda x: x[0].annotate(**x[1]))
     )
     ht = mt.cols()
