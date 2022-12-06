@@ -308,7 +308,7 @@ def apply_irnt(ht, cols):
     return ht
 
 
-def get_genotypes(AF_cutoff=0.001, n_partitions=5000, overwrite=False):
+def get_genotypes(AF_cutoff=0.001, n_partitions=5000, overwrite=False, use_global_hwe=False):
     intermediate_path = f'{GWAS_DIR}filtered_gt_2.mt'
     final_path = f'{GWAS_DIR}filtered_gt_3.mt'
 
@@ -348,7 +348,8 @@ def get_genotypes(AF_cutoff=0.001, n_partitions=5000, overwrite=False):
             mt = mt.checkpoint(intermediate_path, overwrite=True)
 
         mt = hl.variant_qc(mt)
-        mt = mt.filter_rows(mt.variant_qc.p_value_hwe > 1e-10, keep = True)
+        if use_global_hwe:
+            mt = mt.filter_rows(mt.variant_qc.p_value_hwe > 1e-10, keep = True)
         mt = mt.filter_rows(mt.variant_qc.call_rate > 0.95, keep = True)
         mt = mt.drop('variant_qc').repartition(n_partitions).checkpoint(final_path, overwrite=True)
     
@@ -462,12 +463,15 @@ def aou_generate_final_lambdas(mt, suffix, overwrite):
 
 def filter_mt_per_pop_maf(mt, pop, cutoff, overwrite_gt):
     """ Expects that MT has a GT and .covariates.pop field.
+    Also filters based on p_hwe (two sided) per-population.
     """
     this_pop_path = f'{TEMP}mt/genotype_mt_filtered_{pop}_maf_pass.mt'
     if hl.hadoop_exists(f'{this_pop_path}/_SUCCESS') and not overwrite_gt:
         mt_af_filt = hl.read_matrix_table(this_pop_path)
     else:
         mt_af_filt = mt.filter_cols(mt.covariates.pop == pop)
+        mt_af_filt = mt_af_filt.annotate_rows(hwe = hl.agg.hardy_weinberg_test(mt_af_filt.GT))
+        mt_af_filt = mt_af_filt.filter_rows(mt_af_filt.hwe.p_value > 1e-10, keep = True).drop('hwe')
         mt_af_filt = mt_af_filt.annotate_rows(gt_stats = hl.agg.call_stats(mt_af_filt.GT, mt_af_filt.alleles))
         mt_af_filt = mt_af_filt.annotate_rows(minor_AF = hl.min(mt_af_filt.gt_stats.AF))
         mt_af_filt = mt_af_filt.filter_rows(mt_af_filt.minor_AF > cutoff).drop('gt_stats')
