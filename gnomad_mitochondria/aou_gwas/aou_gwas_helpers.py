@@ -308,7 +308,7 @@ def apply_irnt(ht, cols):
     return ht
 
 
-def get_genotypes(AF_cutoff=0.001, n_partitions=5000, overwrite=False, use_global_hwe=False):
+def get_genotypes(AF_cutoff=0.001, n_partitions=5000, overwrite=False, use_global_hwe=True):
     intermediate_path = f'{GWAS_DIR}filtered_gt_2.mt'
     final_path = f'{GWAS_DIR}filtered_gt_3.mt'
 
@@ -329,9 +329,9 @@ def get_genotypes(AF_cutoff=0.001, n_partitions=5000, overwrite=False, use_globa
             #split = hl.split_multi_hts(multi, permit_shuffle=False)
             #mt = split.union_rows(bi)
 
-            # NOTE this is not actually MAF!! this is never an issue because we recompute per-pop
             mt = mt.annotate_rows(MAF = mt.info.AF[mt.a_index-1])
-            mt = mt.filter_rows(hl.min([mt.MAF, 1-mt.MAF]) > AF_cutoff, keep = True)
+            mt = mt.annotate_rows(MAF = hl.min([mt.MAF, 1-mt.MAF]))
+            mt = mt.filter_rows(mt.MAF > AF_cutoff, keep = True)
             mt = mt.naive_coalesce(n_partitions*2).checkpoint(f'{GWAS_DIR}filtered_gt_1.mt', overwrite=True)
 
             related_remove = hl.import_table(REL_SAMP_PATH,
@@ -348,10 +348,12 @@ def get_genotypes(AF_cutoff=0.001, n_partitions=5000, overwrite=False, use_globa
             mt = mt.checkpoint(intermediate_path, overwrite=True)
 
         mt = hl.variant_qc(mt)
+        mt = mt.annotate_rows(hwe = hl.agg.hardy_weinberg_test(mt.GT, one_sided=True))
         if use_global_hwe:
-            mt = mt.filter_rows(mt.variant_qc.p_value_hwe > 1e-10, keep = True)
+            mt = mt.filter_rows(mt.hwe.p_value > 1e-10, keep=True)
+            # mt = mt.filter_rows(mt.variant_qc.p_value_hwe > 1e-10, keep = True)
         mt = mt.filter_rows(mt.variant_qc.call_rate > 0.95, keep = True)
-        mt = mt.drop('variant_qc').repartition(n_partitions).checkpoint(final_path, overwrite=True)
+        mt = mt.drop('variant_qc', 'hwe').repartition(n_partitions).checkpoint(final_path, overwrite=True)
     
     return mt
 
@@ -461,7 +463,7 @@ def aou_generate_final_lambdas(mt, suffix, overwrite):
     return mt
 
 
-def filter_mt_per_pop_maf(mt, pop, cutoff, overwrite_gt):
+def filter_mt_per_pop_maf(mt, pop, cutoff, overwrite_gt, perform_per_pop_hwe=False):
     """ Expects that MT has a GT and .covariates.pop field.
     Also filters based on p_hwe (two sided) per-population.
     """
@@ -470,8 +472,12 @@ def filter_mt_per_pop_maf(mt, pop, cutoff, overwrite_gt):
         mt_af_filt = hl.read_matrix_table(this_pop_path)
     else:
         mt_af_filt = mt.filter_cols(mt.covariates.pop == pop)
-        mt_af_filt = mt_af_filt.annotate_rows(hwe = hl.agg.hardy_weinberg_test(mt_af_filt.GT))
-        mt_af_filt = mt_af_filt.filter_rows(mt_af_filt.hwe.p_value > 1e-10, keep = True).drop('hwe')
+        
+        if perform_per_pop_hwe:
+            print('Running per-pop HWE filtering!')
+            mt_af_filt = mt_af_filt.annotate_rows(hwe = hl.agg.hardy_weinberg_test(mt_af_filt.GT))
+            mt_af_filt = mt_af_filt.filter_rows(mt_af_filt.hwe.p_value > 1e-10, keep = True).drop('hwe')
+        
         mt_af_filt = mt_af_filt.annotate_rows(gt_stats = hl.agg.call_stats(mt_af_filt.GT, mt_af_filt.alleles))
         mt_af_filt = mt_af_filt.annotate_rows(minor_AF = hl.min(mt_af_filt.gt_stats.AF))
         mt_af_filt = mt_af_filt.filter_rows(mt_af_filt.minor_AF > cutoff).drop('gt_stats')
