@@ -463,6 +463,36 @@ def aou_generate_final_lambdas(mt, suffix, overwrite):
     return mt
 
 
+def get_snv_count_phenotype():
+    ht = hl.import_table(FINAL_VARIANT_CALLSET_PATH,
+                        types={'locus': hl.tstr, 'alleles': hl.tstr, 's': hl.tstr,
+                            'rsid': hl.tstr, 'variant':hl.tstr, 'batch':hl.tstr,
+                            'common_low_heteroplasmy': hl.tbool,
+                            'hap_defining_variant': hl.tbool,
+                            'region': hl.tstr,
+                            'variant_context': hl.tstr,
+                            'dp_mean': hl.tfloat64,
+                            'mq_mean': hl.tfloat64, 'tlod_mean': hl.tfloat64,
+                            'AF_hom': hl.tfloat64, 'AF_het': hl.tfloat64,
+                            'AC_hom': hl.tint64, 'AC_het': hl.tint64,
+                            'max_hl': hl.tfloat64, 'dp_mean': hl.tfloat64,
+                            'major_haplogroup':hl.tstr, 'hap':hl.tstr, 
+                            'wgs_median_coverage':hl.tfloat64, 'mt_mean_coverage':hl.tfloat64,
+                            'mito_cn':hl.tfloat64, 'age':hl.tfloat64, 'pop':hl.tstr,
+                            'DP':hl.tfloat64, 'AD_ref':hl.tfloat64,'AD_alt':hl.tfloat64,
+                            'MQ':hl.tfloat64,'TLOD':hl.tfloat64, 'GT':hl.tstr, 'HL':hl.tfloat64,
+                            'OriginalSelfRefAlleles':hl.tstr, 'SwappedFieldIDs':hl.tstr, 'FT':hl.tstr, 'FT_LIFT':hl.tstr,
+                            'artifact_prone':hl.tbool, 'lifted':hl.tbool, 'fail_gt':hl.tbool, 'missing_call':hl.tbool}, min_partitions=50)
+    all_s_table = ht.select('s').key_by('s').distinct()
+    ht_heteroplasmies = ht.filter(hl.is_defined(ht.HL) & (ht.HL < 0.95)).repartition(40)
+    ht_heteroplasmies = ht_heteroplasmies.annotate(alleles = ht_heteroplasmies.alleles.split(','))
+    ht_heteroplasmies = ht_heteroplasmies.filter(~hl.is_indel(ht_heteroplasmies.alleles[0], ht_heteroplasmies.alleles[1]))
+    ht_snv_count = ht_heteroplasmies.group_by(ht_heteroplasmies.s).aggregate(N = hl.agg.count())
+    s_not_found = all_s_table.anti_join(ht_snv_count).annotate(N = hl.int64(hl.literal(0)))
+    ht_snv_count = hl.Table.union(ht_snv_count, s_not_found)
+    return ht_snv_count.rename({'N':'snv_count_qcpass'})
+
+
 def filter_mt_per_pop_maf(mt, pop, cutoff, overwrite_gt, perform_per_pop_hwe=False):
     """ Expects that MT has a GT and .covariates.pop field.
     Also filters based on p_hwe (two sided) per-population.
