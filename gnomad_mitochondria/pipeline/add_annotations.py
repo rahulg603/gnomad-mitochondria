@@ -1095,15 +1095,18 @@ def add_filter_annotations(
     return format_filters(input_mt), n_het_below_min_het_threshold
 
 
-def filter_genotypes(input_mt: hl.MatrixTable) -> hl.MatrixTable:
+def filter_genotypes(input_mt: hl.MatrixTable, pass_set: set = {}) -> hl.MatrixTable:
     """
     Set all genotype field values to missing if the variant is not "PASS" for that sample.
 
     :param input_mt: MatrixTable
     :return: MatrixTable with filtered genotype fields set to missing
     """
-    pass_expr = input_mt.FT == {"PASS"}
-
+    if len(pass_set) > 0:
+        pass_expr = (input_mt.FT == {"PASS"}) | input_mt.FT.is_subset(hl.literal(pass_set))
+    else:
+        pass_expr = input_mt.FT == {"PASS"}
+    
     input_mt = input_mt.annotate_entries(
         GT=hl.or_missing(pass_expr, input_mt.GT),
         DP=hl.or_missing(pass_expr, input_mt.DP),
@@ -1961,7 +1964,7 @@ def make_comma_delim(expr):
     return hl.literal(',').join(hl.map(hl.str, expr))
 
 
-def process_mt_for_flat_file_analysis(mt, skip_vep):
+def process_mt_for_flat_file_analysis(mt, skip_vep, allow_gt_fail):
     """ 
     Function to format the MT into high-yield fields used for downstream analysis.
     
@@ -2021,7 +2024,7 @@ def process_mt_for_flat_file_analysis(mt, skip_vep):
                      missing_call = hl.is_missing(ht.HL)).key_by()
 
     # confirm that all fail_gt are missing a call
-    if ht.aggregate(hl.agg.count_where(ht.fail_gt & (~ht.missing_call))) > 0:
+    if not allow_gt_fail and ht.aggregate(hl.agg.count_where(ht.fail_gt & (~ht.missing_call))) > 0:
         raise ValueError('All samples where "GT_PASS" is not found should be missing a heteroplasmy call.')
 
     ht = ht.annotate(**{x: make_comma_delim(ht[x]) for x in ['FT','FT_LIFT','OriginalSelfRefAlleles','alleles','rsid']})
@@ -2191,7 +2194,8 @@ def main(args):  # noqa: D103
 
         # After this, passing GTs have "GT_PASS" rather than PASS in FT. Failing GTs have a reason for failure.
         # FT_LIFT also no longer has "PASS" and can have length 0.
-        mt = filter_genotypes(mt)
+        pass_set_filter_genotypes = {'strand_bias'} if args.allow_strand_bias else {}
+        mt = filter_genotypes(mt, pass_set=pass_set_filter_genotypes)
         # Add variant annotations such as AC, AF, and AN
         mt = mt.annotate_rows(**dict(generate_expressions(mt, min_hom_threshold)))
         # Checkpoint to help avoid Hail errors from large queries
@@ -2238,7 +2242,7 @@ def main(args):  # noqa: D103
         )
 
     logger.info('Writing variants flat file for internal use...')
-    ht_for_output = process_mt_for_flat_file_analysis(mt, args.fully_skip_vep)
+    ht_for_output = process_mt_for_flat_file_analysis(mt, args.fully_skip_vep, args.allow_strand_bias)
     ht_for_output.export(annotated_mt_path.replace('.mt','_processed_flat.tsv.bgz'))
 
     logger.info("Writing ht...")
@@ -2357,6 +2361,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '--max-cn', default=500, type=int, help='Allows specification of the maximum copy number filter. Only operates if keep-samples if false.'
+    )
+    parser.add_argument(
+        '--allow-strand-bias', action='store_true', help='In some cases, one may want to allow strand bias calls to persist in the final callset.'
     )
 
     args = parser.parse_args()
