@@ -214,7 +214,7 @@ def join_mitochondria_vcfs_into_mt(
                     MQ=hl.float(mt.info["MMQ"][1]),
                     TLOD=mt.info["TLOD"][0],
                     FT=hl.if_else(hl.len(mt.filters) == 0, {"PASS"}, mt.filters),
-                    AS_SB_TABLE=mt.info.AS_SB_TABLE.split('|'),
+                    AS_SB_TABLE=mt.info.AS_SB_TABLE.split('\\|'),
                 )
                 mt = mt.key_rows_by(
                     locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),

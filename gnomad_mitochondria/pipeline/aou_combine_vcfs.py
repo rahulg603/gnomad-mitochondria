@@ -27,6 +27,7 @@ META_DICT = {
             "Number": "1",
             "Type": "Float",
         },
+        'AS_SB_TABLE': {'Description':'Allele specific forward/reverse read counts for strand bias tests. Includes the reference and alleles.', 'Number':'R', 'Type':'String'}
     },
 }
 
@@ -209,7 +210,8 @@ def join_mitochondria_vcfs_into_mt(
                     mt = mt.select_entries("DP", "HL", "MQ", "TLOD", "FT")
                 # Use GRCh37 reference as most external resources added in downstream scripts use GRCh37 contig names
                 # (although note that the actual sequences of the mitochondria in both GRCh37 and GRCh38 are the same)
-                mt = mt.annotate_entries(FT = hl.set(mt.FT))
+                mt = mt.annotate_entries(FT = hl.set(mt.FT), 
+                                         AS_SB_TABLE=mt.info.AS_SB_TABLE.split('\\|'))
                 mt = mt.key_rows_by(
                     locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),
                     alleles=mt.alleles,
