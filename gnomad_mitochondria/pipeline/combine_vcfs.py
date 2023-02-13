@@ -27,6 +27,7 @@ META_DICT = {
             "Number": "1",
             "Type": "Float",
         },
+        'AS_SB_TABLE': {'Description':'Allele specific forward/reverse read counts for strand bias tests. Includes the reference and alleles.', 'Number':'R', 'Type':'String'}
     },
 }
 
@@ -213,6 +214,7 @@ def join_mitochondria_vcfs_into_mt(
                     MQ=hl.float(mt.info["MMQ"][1]),
                     TLOD=mt.info["TLOD"][0],
                     FT=hl.if_else(hl.len(mt.filters) == 0, {"PASS"}, mt.filters),
+                    AS_SB_TABLE=mt.info.AS_SB_TABLE.split('|'),
                 )
                 mt = mt.key_rows_by(
                     locus=hl.locus("MT", mt.locus.position, reference_genome="GRCh37"),
@@ -220,7 +222,7 @@ def join_mitochondria_vcfs_into_mt(
                 )
                 mt = mt.key_cols_by(s=s)
                 mt = mt.select_rows()
-                mt.entries().show()
+                #mt.entries().show()
                 mt_list.append(mt)
                 if idx % 20 == 0:
                     logger.info(f"Imported sample {str(idx)}...")

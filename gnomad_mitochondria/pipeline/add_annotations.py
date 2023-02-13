@@ -2014,6 +2014,7 @@ def process_mt_for_flat_file_analysis(mt, skip_vep, allow_gt_fail):
         raise ValueError('Any missing heteroplasmies at DP > 100 should not be passing in terms of FT.')
 
     ht = ht.annotate(AD_ref = ht.AD[0], AD_alt = ht.AD[1], FT = ht.FT.union(ht.filters)).drop('AD','filters')
+    ht = ht.annotate(F2R1_ref = ht.F2R1[0], F2R1_alt = ht.F2R1[1], F1R2_ref = ht.F1R2[0], F1R2_alt = ht.F1R2[1]).drop('F2R1','F1R2')
     ht = ht.annotate(FT = ht.FT.difference({'PASS'}), FT_LIFT = ht.FT_LIFT.difference({'PASS'}))
     
     # fail_gt should be a subset of missing_call
