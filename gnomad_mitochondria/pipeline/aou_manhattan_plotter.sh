@@ -20,9 +20,11 @@ export p_col=Pvalue
 export af_col=minor_AF
 export conf_col=NA #low_confidence
 export exponentiate_p=FALSE
-export mem=20
+export mem=30
 export point_size=18
-
+export wid=1300
+export hei=640
+export cex=1.3
 
 #### INSTALL DEPENDENCIES
 pip install pyhocon
@@ -78,6 +80,9 @@ conf_col = os.getenv("conf_col")
 task_mem = int(os.getenv("mem"))
 point_size = int(os.getenv("point_size"))
 exponentiate_p = True if os.getenv("exponentiate_p") == 'TRUE' else False
+wid = int(os.getenv("wid"))
+hei = int(os.getenv("hei"))
+cex = float(os.getenv("cex"))
 
 # get sumstats
 df = pd.read_csv('files_of_interest.txt', header=None, names=['path'])
@@ -152,7 +157,10 @@ for idx in range(0, min(n_max, df.shape[0])):
                   'ManhattanPlotter.exponentiate_p': exponentiate_p,
                   'ManhattanPlotter.p_col': p_col,
                   'ManhattanPlotter.af_col': af_col,
-                  'ManhattanPlotter.mem': task_mem}
+                  'ManhattanPlotter.mem': task_mem,
+                  'ManhattanPlotter.wid': hei,
+                  'ManhattanPlotter.hei': wid,
+                  'ManhattanPlotter.cex': cex}
     if conf_col != 'NA':
         dct_update.update({'ManhattanPlotter.conf_col': conf_col})
     
